@@ -94,3 +94,71 @@ def mock_github(monkeypatch: Any, mock_github_client: Mock) -> Mock:
 
     monkeypatch.setattr("spi_agent.github_tools.Github", mock_github_constructor)
     return mock_github_client
+
+
+@pytest.fixture
+def mock_github_pr() -> Mock:
+    """Create a mock GitHub pull request object."""
+    pr = Mock()
+    pr.number = 123
+    pr.title = "Test Pull Request"
+    pr.body = "This is a test PR body"
+    pr.state = "open"
+    pr.draft = False
+    pr.merged = False
+    pr.mergeable = True
+    pr.mergeable_state = "clean"
+
+    # Base and head refs
+    base = Mock()
+    base.ref = "main"
+    pr.base = base
+
+    head = Mock()
+    head.ref = "feature/test"
+    pr.head = head
+
+    # Labels and assignees
+    label1 = Mock()
+    label1.name = "enhancement"
+    pr.labels = [label1]
+
+    assignee1 = Mock()
+    assignee1.login = "testuser"
+    pr.assignees = [assignee1]
+
+    # Timestamps
+    pr.created_at = datetime(2025, 1, 6, 10, 0, 0)
+    pr.updated_at = datetime(2025, 1, 6, 12, 0, 0)
+    pr.merged_at = None
+
+    # URLs and counts
+    pr.html_url = "https://github.com/test-org/test-repo1/pull/123"
+    pr.comments = 2
+    pr.review_comments = 1
+    pr.commits = 3
+    pr.changed_files = 5
+    pr.additions = 150
+    pr.deletions = 50
+
+    # User
+    user = Mock()
+    user.login = "prauthor"
+    pr.user = user
+
+    # Mock methods
+    pr.as_issue = Mock()
+    pr.create_issue_comment = Mock()
+    pr.edit = Mock()
+    pr.merge = Mock()
+
+    return pr
+
+
+@pytest.fixture
+def mock_github_repo_with_pr(mock_github_repo: Mock, mock_github_pr: Mock) -> Mock:
+    """Enhance mock repository with PR support."""
+    mock_github_repo.get_pulls.return_value = [mock_github_pr]
+    mock_github_repo.get_pull.return_value = mock_github_pr
+    mock_github_repo.create_pull.return_value = mock_github_pr
+    return mock_github_repo
