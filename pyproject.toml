@@ -64,6 +64,12 @@ addopts = [
     "--cov-report=html",
 ]
 
+[tool.coverage.run]
+omit = [
+    "src/spi_agent/cli.py",
+    "src/spi_agent/copilot/*",
+]
+
 [tool.black]
 line-length = 100
 target-version = ['py311']

@@ -76,99 +76,146 @@ spi.py -q -p "How many issues?"  # Quiet mode
 
 ## GitHub Tools
 
-The agent has access to the following GitHub operations:
+The agent has access to **19 GitHub tools** across three domains:
 
-### 1. List Issues
-**Function:** `list_issues(repository, state, labels, assignee, limit)`
+### Issues (7 tools)
 
+#### 1. List Issues
 Lists issues from a repository with optional filtering.
-
-**Parameters:**
-- `repository` (required): Short name (e.g., "partition") or full name ("org/repo")
-- `state`: "open" (default), "closed", or "all"
-- `labels`: Comma-separated label names
-- `assignee`: GitHub username or "none" or "*"
-- `limit`: Maximum number of issues (default: 30)
 
 **Examples:**
 - "List open issues in partition"
-- "Show me closed issues in legal with label bug"
+- "Show me closed bugs in legal"
 
-### 2. Get Issue
-**Function:** `get_issue(repository, issue_number)`
-
+#### 2. Get Issue
 Retrieves detailed information about a specific issue.
-
-**Parameters:**
-- `repository` (required): Repository name
-- `issue_number` (required): Issue number
 
 **Examples:**
 - "Tell me about issue #2 in partition"
 - "Show details for issue #5"
 
-### 3. Create Issue
-**Function:** `create_issue(repository, title, body, labels, assignees)`
+#### 3. Get Issue Comments
+Reads all comments on an issue.
 
+**Examples:**
+- "Show me comments on issue #5"
+- "What are people saying about issue #2?"
+
+#### 4. Create Issue
 Creates a new issue in a repository.
-
-**Parameters:**
-- `repository` (required): Repository name
-- `title` (required): Issue title
-- `body`: Issue description (markdown supported)
-- `labels`: Comma-separated label names
-- `assignees`: Comma-separated GitHub usernames
 
 **Examples:**
 - "Create an issue in partition: Fix authentication bug"
 - "Create a bug report in legal with label security"
 
-### 4. Update Issue
-**Function:** `update_issue(repository, issue_number, title, body, state, labels, assignees)`
-
-Updates an existing issue.
-
-**Parameters:**
-- `repository` (required): Repository name
-- `issue_number` (required): Issue number
-- `title`: New title
-- `body`: New body
-- `state`: "open" or "closed"
-- `labels`: New labels (replaces existing)
-- `assignees`: New assignees (replaces existing)
+#### 5. Update Issue
+Updates an existing issue (including closing).
 
 **Examples:**
 - "Close issue #2 in partition"
 - "Add label 'bug' to issue #3"
-- "Assign issue #5 to danielscholl"
 
-### 5. Add Comment
-**Function:** `add_comment(repository, issue_number, comment)`
-
+#### 6. Add Issue Comment
 Adds a comment to an existing issue.
-
-**Parameters:**
-- `repository` (required): Repository name
-- `issue_number` (required): Issue number
-- `comment` (required): Comment text (markdown supported)
 
 **Examples:**
 - "Add comment to issue #2: This is fixed in v1.2"
-- "Comment on issue #5 in legal: Needs investigation"
+- "Comment on issue #5: Needs investigation"
 
-### 6. Search Issues
-**Function:** `search_issues(query, repositories, limit)`
-
+#### 7. Search Issues
 Searches for issues across repositories.
-
-**Parameters:**
-- `query` (required): Search query
-- `repositories`: Specific repos to search (default: all configured)
-- `limit`: Max results (default: 30)
 
 **Examples:**
 - "Search for CodeQL across all repositories"
-- "Find issues mentioning authentication in partition"
+- "Find issues mentioning authentication"
+
+### Pull Requests (7 tools)
+
+#### 8. List Pull Requests
+Lists PRs in a repository with filtering.
+
+**Examples:**
+- "List open PRs in partition"
+- "Show me all PRs in legal"
+
+#### 9. Get Pull Request
+Retrieves detailed PR information including merge readiness.
+
+**Examples:**
+- "Show me PR #5"
+- "Get details for pull request #10 in partition"
+
+#### 10. Get PR Comments
+Reads discussion comments on a PR.
+
+**Examples:**
+- "What are people saying about PR #5?"
+- "Show comments on pull request #10"
+
+#### 11. Create Pull Request
+Creates a new pull request from branches.
+
+**Examples:**
+- "Create a PR from feature/auth to main in partition"
+- "Open a pull request for my changes"
+
+#### 12. Update Pull Request
+Updates PR metadata (title, body, state, draft status).
+
+**Examples:**
+- "Close PR #5"
+- "Mark PR #10 as ready for review"
+
+#### 13. Merge Pull Request
+Merges a pull request with specified method.
+
+**Examples:**
+- "Merge PR #5 using squash"
+- "Merge pull request #10"
+
+#### 14. Add PR Comment
+Adds a comment to PR discussion.
+
+**Examples:**
+- "Comment on PR #5: Looks good to me"
+- "Add comment to pull request #10: Needs tests"
+
+### Workflows & Actions (5 tools)
+
+#### 15. List Workflows
+Lists available workflows in a repository.
+
+**Examples:**
+- "What workflows are in partition?"
+- "Show me all workflows in legal"
+
+#### 16. List Workflow Runs
+Lists recent workflow runs with filtering.
+
+**Examples:**
+- "Show me recent workflow runs"
+- "List failed runs in partition"
+
+#### 17. Get Workflow Run
+Gets detailed information about a specific workflow run.
+
+**Examples:**
+- "Show me workflow run #123"
+- "Get details for run #456"
+
+#### 18. Trigger Workflow
+Manually triggers a workflow (workflow_dispatch).
+
+**Examples:**
+- "Trigger the build workflow on main"
+- "Run the release workflow"
+
+#### 19. Cancel Workflow Run
+Cancels a running or queued workflow.
+
+**Examples:**
+- "Cancel workflow run #123"
+- "Stop run #456"
 
 ## Configuration
 

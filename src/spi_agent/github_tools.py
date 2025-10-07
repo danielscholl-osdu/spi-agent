@@ -46,6 +46,80 @@ class GitHubTools:
             "author": issue.user.login if issue.user else "unknown",
         }
 
+    def _format_comment(self, comment: Any) -> Dict[str, Any]:
+        """Format GitHub comment to dict with truncation for long bodies."""
+        body = comment.body or ""
+        max_len = 1500  # Prevent overly long responses
+        truncated = body[:max_len]
+        if len(body) > max_len:
+            truncated += "\n… (comment truncated)"
+        return {
+            "id": comment.id,
+            "body": truncated,
+            "author": comment.user.login if comment.user else "unknown",
+            "created_at": comment.created_at.isoformat(),
+            "updated_at": comment.updated_at.isoformat(),
+            "html_url": comment.html_url,
+        }
+
+    def _format_pr(self, pr: Any) -> Dict[str, Any]:
+        """Format GitHub pull request to dict."""
+        return {
+            "number": pr.number,
+            "title": pr.title,
+            "body": pr.body or "",
+            "state": pr.state,
+            "draft": pr.draft,
+            "merged": pr.merged,
+            "mergeable": pr.mergeable,
+            "mergeable_state": pr.mergeable_state,
+            "base_ref": pr.base.ref,
+            "head_ref": pr.head.ref,
+            "labels": [label.name for label in pr.labels],
+            "assignees": [assignee.login for assignee in pr.assignees],
+            "created_at": pr.created_at.isoformat(),
+            "updated_at": pr.updated_at.isoformat(),
+            "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+            "html_url": pr.html_url,
+            "comments_count": pr.comments,
+            "review_comments_count": pr.review_comments,
+            "commits_count": pr.commits,
+            "changed_files": pr.changed_files,
+            "additions": pr.additions,
+            "deletions": pr.deletions,
+            "author": pr.user.login if pr.user else "unknown",
+        }
+
+    def _format_workflow(self, workflow: Any) -> Dict[str, Any]:
+        """Format GitHub workflow to dict."""
+        return {
+            "id": workflow.id,
+            "name": workflow.name,
+            "path": workflow.path,
+            "state": workflow.state,
+            "created_at": workflow.created_at.isoformat(),
+            "updated_at": workflow.updated_at.isoformat(),
+            "html_url": workflow.html_url,
+        }
+
+    def _format_workflow_run(self, run: Any) -> Dict[str, Any]:
+        """Format GitHub workflow run to dict."""
+        return {
+            "id": run.id,
+            "name": run.name,
+            "workflow_id": run.workflow_id,
+            "status": run.status,  # queued, in_progress, completed
+            "conclusion": run.conclusion,  # success, failure, cancelled, skipped
+            "head_branch": run.head_branch,
+            "head_sha": run.head_sha[:7] if run.head_sha else "unknown",  # Short SHA
+            "event": run.event,  # push, pull_request, workflow_dispatch, etc.
+            "created_at": run.created_at.isoformat(),
+            "updated_at": run.updated_at.isoformat(),
+            "run_started_at": run.run_started_at.isoformat() if run.run_started_at else None,
+            "html_url": run.html_url,
+            "actor": run.actor.login if run.actor else "unknown",
+        }
+
     def list_issues(
         self,
         repo: Annotated[
@@ -167,6 +241,62 @@ class GitHubTools:
             return f"GitHub API error: {e.data.get('message', str(e))}"
         except Exception as e:
             return f"Error getting issue: {str(e)}"
+
+    def get_issue_comments(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        issue_number: Annotated[int, Field(description="Issue number")],
+        limit: Annotated[int, Field(description="Maximum number of comments")] = 50,
+    ) -> str:
+        """
+        Get comments from an issue.
+
+        Returns formatted string with comment list.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            issue = gh_repo.get_issue(issue_number)
+
+            if issue.pull_request:
+                return f"#{issue_number} is a pull request, not an issue"
+
+            # Get comments
+            comments = issue.get_comments()
+
+            # Format results
+            results = []
+            count = 0
+            for comment in comments:
+                results.append(self._format_comment(comment))
+                count += 1
+                if count >= limit:
+                    break
+
+            if not results:
+                return f"No comments found on issue #{issue_number} in {repo_full_name}"
+
+            # Format for display
+            output_lines = [f"Comments on issue #{issue_number} in {repo_full_name}:\n\n"]
+            for idx, comment_data in enumerate(results, 1):
+                output_lines.append(
+                    f"Comment #{idx} by {comment_data['author']} ({comment_data['created_at']}):\n"
+                    f"  {comment_data['body']}\n"
+                    f"  URL: {comment_data['html_url']}\n\n"
+                )
+
+            output_lines.append(f"Total: {len(results)} comment(s)")
+            if count >= limit and issue.comments > limit:
+                output_lines.append(f" (showing first {limit} of {issue.comments})")
+
+            return "".join(output_lines)
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Issue #{issue_number} not found in {repo}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error getting comments: {str(e)}"
 
     def create_issue(
         self,
@@ -386,6 +516,760 @@ class GitHubTools:
         except Exception as e:
             return f"Error searching issues: {str(e)}"
 
+    # ============ PULL REQUESTS ============
+
+    def list_pull_requests(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        state: Annotated[str, Field(description="PR state: 'open', 'closed', or 'all'")] = "open",
+        base_branch: Annotated[
+            Optional[str], Field(description="Filter by base branch (e.g., 'main')")
+        ] = None,
+        head_branch: Annotated[
+            Optional[str], Field(description="Filter by head branch (e.g., 'feature/auth')")
+        ] = None,
+        limit: Annotated[int, Field(description="Maximum number of PRs to return")] = 30,
+    ) -> str:
+        """
+        List pull requests in a repository.
+
+        Returns formatted string with PR list.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+
+            # Get pull requests
+            prs = gh_repo.get_pulls(state=state, base=base_branch or NotSet, head=head_branch or NotSet)
+
+            # Format results
+            results = []
+            count = 0
+            for pr in prs:
+                results.append(self._format_pr(pr))
+                count += 1
+                if count >= limit:
+                    break
+
+            if not results:
+                return f"No {state} pull requests found in {repo_full_name}"
+
+            # Format for display
+            output_lines = [f"Found {len(results)} pull request(s) in {repo_full_name}:\n\n"]
+            for pr_data in results:
+                state_display = f"[{pr_data['state']}]"
+                if pr_data['merged']:
+                    state_display = "[merged]"
+                elif pr_data['draft']:
+                    state_display = "[draft]"
+
+                output_lines.append(
+                    f"#{pr_data['number']}: {pr_data['title']} {state_display}\n"
+                    f"  Author: {pr_data['author']} | Base: {pr_data['base_ref']} ← Head: {pr_data['head_ref']}\n"
+                    f"  💬 {pr_data['comments_count']} comments | 📝 {pr_data['changed_files']} files changed\n"
+                    f"  Created: {pr_data['created_at']}\n"
+                    f"  URL: {pr_data['html_url']}\n\n"
+                )
+
+            return "".join(output_lines)
+
+        except GithubException as e:
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error listing pull requests: {str(e)}"
+
+    def get_pull_request(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+    ) -> str:
+        """
+        Get detailed information about a specific pull request.
+
+        Returns formatted string with PR details.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            pr = gh_repo.get_pull(pr_number)
+
+            pr_data = self._format_pr(pr)
+
+            output = [
+                f"Pull Request #{pr_data['number']} in {repo_full_name}\n\n",
+                f"Title: {pr_data['title']}\n",
+                f"State: {pr_data['state']}\n",
+                f"Author: {pr_data['author']}\n",
+                f"Base: {pr_data['base_ref']} ← Head: {pr_data['head_ref']}\n",
+                f"Created: {pr_data['created_at']}\n",
+                f"Updated: {pr_data['updated_at']}\n",
+            ]
+
+            if pr_data["merged"]:
+                output.append(f"Merged: {pr_data['merged_at']}\n")
+
+            output.append(f"\nChanges:\n")
+            output.append(f"  📝 Files changed: {pr_data['changed_files']}\n")
+            output.append(f"  ➕ Additions: {pr_data['additions']} lines\n")
+            output.append(f"  ➖ Deletions: {pr_data['deletions']} lines\n")
+            output.append(f"  💬 Comments: {pr_data['comments_count']}\n")
+            output.append(f"  💬 Review comments: {pr_data['review_comments_count']}\n")
+
+            # Merge readiness
+            output.append(f"\nMerge Readiness:\n")
+            mergeable = pr_data['mergeable']
+            if mergeable is None:
+                output.append(f"  Mergeable: calculating...\n")
+            elif mergeable:
+                output.append(f"  Mergeable: yes ({pr_data['mergeable_state']})\n")
+            else:
+                output.append(f"  Mergeable: no ({pr_data['mergeable_state']})\n")
+            output.append(f"  Draft: {'yes' if pr_data['draft'] else 'no'}\n")
+
+            if pr_data["labels"]:
+                output.append(f"\nLabels: {', '.join(pr_data['labels'])}\n")
+
+            if pr_data["assignees"]:
+                output.append(f"Assignees: {', '.join(pr_data['assignees'])}\n")
+
+            if pr_data["body"]:
+                output.append(f"\nDescription:\n{pr_data['body']}\n")
+
+            output.append(f"\nURL: {pr_data['html_url']}\n")
+
+            return "".join(output)
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Pull request #{pr_number} not found in {repo}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error getting pull request: {str(e)}"
+
+    def get_pr_comments(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+        limit: Annotated[int, Field(description="Maximum number of comments")] = 50,
+    ) -> str:
+        """
+        Get discussion comments from a pull request.
+
+        Returns formatted string with comment list.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            pr = gh_repo.get_pull(pr_number)
+
+            # Get PR comments via issue interface
+            issue = pr.as_issue()
+            comments = issue.get_comments()
+
+            # Format results
+            results = []
+            count = 0
+            for comment in comments:
+                results.append(self._format_comment(comment))
+                count += 1
+                if count >= limit:
+                    break
+
+            if not results:
+                return f"No comments found on PR #{pr_number} in {repo_full_name}"
+
+            # Format for display
+            output_lines = [f"Comments on PR #{pr_number} in {repo_full_name}:\n\n"]
+            for idx, comment_data in enumerate(results, 1):
+                output_lines.append(
+                    f"Comment #{idx} by {comment_data['author']} ({comment_data['created_at']}):\n"
+                    f"  {comment_data['body']}\n"
+                    f"  URL: {comment_data['html_url']}\n\n"
+                )
+
+            output_lines.append(f"Total: {len(results)} comment(s)")
+            if count >= limit and pr.comments > limit:
+                output_lines.append(f" (showing first {limit} of {pr.comments})")
+
+            return "".join(output_lines)
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Pull request #{pr_number} not found in {repo}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error getting PR comments: {str(e)}"
+
+    def create_pull_request(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        title: Annotated[str, Field(description="Pull request title")],
+        head_branch: Annotated[
+            str, Field(description="Source branch (e.g., 'feature/auth' or 'user:feature/auth')")
+        ],
+        base_branch: Annotated[str, Field(description="Target branch")] = "main",
+        body: Annotated[
+            Optional[str], Field(description="PR description (markdown supported)")
+        ] = None,
+        draft: Annotated[bool, Field(description="Create as draft PR")] = False,
+        maintainer_can_modify: Annotated[
+            bool, Field(description="Allow maintainers to edit")
+        ] = True,
+    ) -> str:
+        """
+        Create a new pull request.
+
+        Returns formatted string with created PR info.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+
+            # Create PR
+            pr = gh_repo.create_pull(
+                title=title,
+                body=body or "",
+                head=head_branch,
+                base=base_branch,
+                draft=draft,
+                maintainer_can_modify=maintainer_can_modify,
+            )
+
+            return (
+                f"✓ Created pull request #{pr.number} in {repo_full_name}\n"
+                f"Title: {pr.title}\n"
+                f"Base: {pr.base.ref} ← Head: {pr.head.ref}\n"
+                f"Draft: {'yes' if pr.draft else 'no'}\n"
+                f"URL: {pr.html_url}\n"
+            )
+
+        except GithubException as e:
+            # Provide helpful guidance for branch errors
+            if e.status == 422:
+                msg = e.data.get('message', '')
+                if 'does not exist' in msg.lower() or 'not found' in msg.lower():
+                    return (
+                        f"Branch not found. For same-repo PR use 'branch-name'. "
+                        f"For cross-fork PR use 'owner:branch-name'. Error: {msg}"
+                    )
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error creating pull request: {str(e)}"
+
+    def update_pull_request(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+        title: Annotated[Optional[str], Field(description="New title")] = None,
+        body: Annotated[Optional[str], Field(description="New body/description")] = None,
+        state: Annotated[
+            Optional[str], Field(description="New state: 'open' or 'closed'")
+        ] = None,
+        draft: Annotated[Optional[bool], Field(description="Toggle draft status")] = None,
+        base_branch: Annotated[Optional[str], Field(description="New base branch")] = None,
+        labels: Annotated[
+            Optional[str], Field(description="Comma-separated labels (replaces existing)")
+        ] = None,
+        assignees: Annotated[
+            Optional[str], Field(description="Comma-separated assignees (replaces existing)")
+        ] = None,
+    ) -> str:
+        """
+        Update pull request metadata.
+
+        Returns formatted string with update confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            pr = gh_repo.get_pull(pr_number)
+
+            # Build update parameters for PR
+            update_params = {}
+            updated_fields = []
+
+            if title is not None:
+                update_params["title"] = title
+                updated_fields.append("title")
+
+            if body is not None:
+                update_params["body"] = body
+                updated_fields.append("body")
+
+            if state is not None:
+                if state.lower() not in ["open", "closed"]:
+                    return f"Invalid state '{state}'. Must be 'open' or 'closed'"
+                if pr.merged:
+                    return f"Cannot change state of merged PR #{pr_number}"
+                update_params["state"] = state.lower()
+                updated_fields.append("state")
+
+            if draft is not None:
+                update_params["draft"] = draft
+                updated_fields.append("draft")
+
+            if base_branch is not None:
+                update_params["base"] = base_branch
+                updated_fields.append("base")
+
+            # Apply PR updates
+            if update_params:
+                pr.edit(**update_params)
+
+            # Handle labels and assignees via issue interface
+            issue_params = {}
+            if labels is not None:
+                label_list = [l.strip() for l in labels.split(",") if l.strip()]
+                issue_params["labels"] = label_list
+                updated_fields.append("labels")
+
+            if assignees is not None:
+                assignee_list = [a.strip() for a in assignees.split(",") if a.strip()]
+                issue_params["assignees"] = assignee_list
+                updated_fields.append("assignees")
+
+            # Apply issue updates (labels/assignees)
+            if issue_params:
+                issue = pr.as_issue()
+                issue.edit(**issue_params)
+
+            if not updated_fields:
+                return f"No updates specified for PR #{pr_number}"
+
+            updates_made = ", ".join(updated_fields)
+            return (
+                f"✓ Updated pull request #{pr_number} in {repo_full_name}\n"
+                f"Updated fields: {updates_made}\n"
+                f"URL: {pr.html_url}\n"
+            )
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Pull request #{pr_number} not found in {repo}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error updating pull request: {str(e)}"
+
+    def merge_pull_request(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+        merge_method: Annotated[
+            str, Field(description="Merge method: 'merge', 'squash', or 'rebase'")
+        ] = "merge",
+        commit_title: Annotated[Optional[str], Field(description="Custom merge commit title")] = None,
+        commit_message: Annotated[
+            Optional[str], Field(description="Custom merge commit message")
+        ] = None,
+    ) -> str:
+        """
+        Merge a pull request.
+
+        Returns formatted string with merge confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            pr = gh_repo.get_pull(pr_number)
+
+            # Check merge readiness
+            if pr.merged:
+                return f"Pull request #{pr_number} is already merged"
+
+            if pr.state == "closed":
+                return f"Cannot merge closed PR #{pr_number}"
+
+            # Check mergeable state
+            if pr.mergeable is False:
+                return (
+                    f"Pull request #{pr_number} cannot be merged\n"
+                    f"Status: {pr.mergeable_state}\n"
+                    f"Check for conflicts, failing checks, or review requirements."
+                )
+
+            # Validate merge method
+            if merge_method not in ["merge", "squash", "rebase"]:
+                return f"Invalid merge method '{merge_method}'. Must be 'merge', 'squash', or 'rebase'"
+
+            # Perform merge
+            result = pr.merge(
+                commit_title=commit_title or NotSet,
+                commit_message=commit_message or NotSet,
+                merge_method=merge_method,
+            )
+
+            if result.merged:
+                return (
+                    f"✓ Merged pull request #{pr_number} in {repo_full_name}\n"
+                    f"Method: {merge_method}\n"
+                    f"Commit SHA: {result.sha}\n"
+                    f"URL: {pr.html_url}\n"
+                )
+            else:
+                return f"Failed to merge PR #{pr_number}: {result.message}"
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Pull request #{pr_number} not found in {repo}"
+            elif e.status == 405:
+                return f"PR #{pr_number} cannot be merged: {e.data.get('message', str(e))}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error merging pull request: {str(e)}"
+
+    def add_pr_comment(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+        comment: Annotated[str, Field(description="Comment text (markdown supported)")],
+    ) -> str:
+        """
+        Add a comment to a pull request discussion.
+
+        Returns formatted string with comment confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            pr = gh_repo.get_pull(pr_number)
+
+            # Validate comment
+            if not comment.strip():
+                return "Cannot add empty comment"
+
+            # Add comment via issue interface
+            pr_comment = pr.create_issue_comment(comment)
+
+            return (
+                f"✓ Added comment to PR #{pr_number} in {repo_full_name}\n"
+                f"Comment ID: {pr_comment.id}\n"
+                f"URL: {pr_comment.html_url}\n"
+            )
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Pull request #{pr_number} not found in {repo}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error adding PR comment: {str(e)}"
+
+    # ============ WORKFLOWS/ACTIONS ============
+
+    def list_workflows(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        limit: Annotated[int, Field(description="Maximum workflows to return")] = 50,
+    ) -> str:
+        """
+        List available workflows in a repository.
+
+        Returns formatted string with workflow list.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+
+            workflows = gh_repo.get_workflows()
+
+            # Format results
+            results = []
+            count = 0
+            for workflow in workflows:
+                results.append(self._format_workflow(workflow))
+                count += 1
+                if count >= limit:
+                    break
+
+            if not results:
+                return f"No workflows found in {repo_full_name}"
+
+            # Format for display
+            output_lines = [f"Workflows in {repo_full_name}:\n\n"]
+            for idx, wf_data in enumerate(results, 1):
+                output_lines.append(
+                    f"{idx}. {wf_data['name']} ({wf_data['path'].split('/')[-1]})\n"
+                    f"   ID: {wf_data['id']} | State: {wf_data['state']}\n"
+                    f"   Path: {wf_data['path']}\n\n"
+                )
+
+            output_lines.append(f"Total: {len(results)} workflow(s)")
+
+            return "".join(output_lines)
+
+        except GithubException as e:
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error listing workflows: {str(e)}"
+
+    def list_workflow_runs(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        workflow_name_or_id: Annotated[
+            Optional[str], Field(description="Filter by workflow name or ID")
+        ] = None,
+        status: Annotated[
+            Optional[str], Field(description="Filter by status (completed, in_progress, queued)")
+        ] = None,
+        branch: Annotated[Optional[str], Field(description="Filter by branch")] = None,
+        limit: Annotated[int, Field(description="Maximum runs to return")] = 30,
+    ) -> str:
+        """
+        List recent workflow runs.
+
+        Returns formatted string with workflow run list.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+
+            # Get workflow runs
+            if workflow_name_or_id:
+                # Try to find specific workflow first
+                try:
+                    workflow = gh_repo.get_workflow(workflow_name_or_id)
+                    runs = workflow.get_runs()
+                except:
+                    # If not found by filename, try all runs and filter
+                    runs = gh_repo.get_workflow_runs()
+            else:
+                runs = gh_repo.get_workflow_runs()
+
+            # Format results
+            results = []
+            count = 0
+            for run in runs:
+                # Apply filters
+                if status and run.status != status:
+                    continue
+                if branch and run.head_branch != branch:
+                    continue
+
+                results.append(self._format_workflow_run(run))
+                count += 1
+                if count >= limit:
+                    break
+
+            if not results:
+                return f"No workflow runs found in {repo_full_name}"
+
+            # Format for display
+            output_lines = [f"Recent workflow runs in {repo_full_name}:\n\n"]
+            for run_data in results:
+                status_icon = "⏳" if run_data['status'] == "in_progress" else (
+                    "✓" if run_data['conclusion'] == "success" else "✗"
+                )
+
+                duration = "running"
+                if run_data['status'] == "completed" and run_data['run_started_at']:
+                    # Calculate duration (simplified)
+                    duration = "completed"
+
+                output_lines.append(
+                    f"{run_data['name']} - Run #{run_data['id']}\n"
+                    f"  Status: {status_icon} {run_data['status']}"
+                )
+                if run_data['conclusion']:
+                    output_lines.append(f" ({run_data['conclusion']})")
+                output_lines.append(
+                    f"\n  Branch: {run_data['head_branch']} | Commit: {run_data['head_sha']}\n"
+                    f"  Triggered by: {run_data['event']}\n"
+                    f"  Started: {run_data['created_at']}\n"
+                    f"  URL: {run_data['html_url']}\n\n"
+                )
+
+            output_lines.append(f"Total: {len(results)} run(s) (showing most recent)")
+
+            return "".join(output_lines)
+
+        except GithubException as e:
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error listing workflow runs: {str(e)}"
+
+    def get_workflow_run(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        run_id: Annotated[int, Field(description="Workflow run ID")],
+    ) -> str:
+        """
+        Get detailed information about a specific workflow run.
+
+        Returns formatted string with workflow run details.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            run = gh_repo.get_workflow_run(run_id)
+
+            run_data = self._format_workflow_run(run)
+
+            status_icon = "⏳" if run_data['status'] == "in_progress" else (
+                "✓" if run_data['conclusion'] == "success" else "✗"
+            )
+
+            output = [
+                f"Workflow Run #{run_data['id']} in {repo_full_name}\n\n",
+                f"Workflow: {run_data['name']}\n",
+                f"Status: {status_icon} {run_data['status']}\n",
+            ]
+
+            if run_data['conclusion']:
+                output.append(f"Conclusion: {run_data['conclusion']}\n")
+
+            output.append(
+                f"Branch: {run_data['head_branch']}\n"
+                f"Commit: {run_data['head_sha']}\n"
+                f"Triggered by: {run_data['event']}\n"
+                f"Actor: {run_data['actor']}\n"
+            )
+
+            output.append(f"\nTiming:\n")
+            output.append(f"  Created: {run_data['created_at']}\n")
+            if run_data['run_started_at']:
+                output.append(f"  Started: {run_data['run_started_at']}\n")
+            else:
+                output.append(f"  Started: Not started\n")
+            output.append(f"  Updated: {run_data['updated_at']}\n")
+
+            # Get jobs
+            try:
+                jobs_paginated = run.get_jobs()
+                job_list = []
+                count = 0
+                for job in jobs_paginated:
+                    job_list.append(job)
+                    count += 1
+                    if count >= 10:  # Limit to first 10 jobs
+                        break
+
+                total_jobs = jobs_paginated.totalCount
+
+                if job_list:
+                    output.append(f"\nJobs ({len(job_list)}):\n")
+                    for job in job_list:
+                        job_status = "✓" if job.conclusion == "success" else (
+                            "✗" if job.conclusion == "failure" else "⏳"
+                        )
+                        output.append(
+                            f"  {job_status} {job.name} - {job.status}"
+                        )
+                        if job.conclusion:
+                            output.append(f" ({job.conclusion})")
+                        output.append(f"\n")
+
+                    if total_jobs > 10:
+                        output.append(f"  ... and {total_jobs - 10} more jobs\n")
+            except:
+                pass  # Jobs may not be available for all runs
+
+            output.append(f"\nRun URL: {run_data['html_url']}\n")
+
+            return "".join(output)
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Workflow run #{run_id} not found in {repo}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error getting workflow run: {str(e)}"
+
+    def trigger_workflow(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        workflow_name_or_id: Annotated[str, Field(description="Workflow filename or ID")],
+        ref: Annotated[str, Field(description="Branch/tag/SHA to run on")] = "main",
+        inputs: Annotated[
+            Optional[str], Field(description="JSON string of workflow inputs")
+        ] = None,
+    ) -> str:
+        """
+        Manually trigger a workflow (workflow_dispatch).
+
+        Returns formatted string with trigger confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+
+            # Get workflow
+            try:
+                workflow = gh_repo.get_workflow(workflow_name_or_id)
+            except:
+                return f"Workflow '{workflow_name_or_id}' not found in {repo_full_name}"
+
+            # Parse inputs if provided
+            parsed_inputs = {}
+            if inputs:
+                try:
+                    import json
+                    parsed_inputs = json.loads(inputs)
+                    # Validate all values are strings
+                    for key, value in parsed_inputs.items():
+                        if not isinstance(value, str):
+                            return f"Workflow input '{key}' must be string, got {type(value).__name__}"
+                except json.JSONDecodeError as e:
+                    return f"Invalid JSON for workflow inputs: {str(e)}"
+
+            # Create dispatch
+            result = workflow.create_dispatch(ref=ref, inputs=parsed_inputs if parsed_inputs else NotSet)
+
+            if result:
+                return (
+                    f"✓ Triggered workflow \"{workflow.name}\" in {repo_full_name}\n"
+                    f"Branch: {ref}\n"
+                    f"Status: Workflow dispatch event created\n"
+                    f"Note: Check workflow runs list to see execution\n\n"
+                    f"Workflow URL: {workflow.html_url}\n"
+                )
+            else:
+                return f"Failed to trigger workflow '{workflow_name_or_id}'"
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Workflow or branch not found: {e.data.get('message', str(e))}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error triggering workflow: {str(e)}"
+
+    def cancel_workflow_run(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        run_id: Annotated[int, Field(description="Workflow run ID")],
+    ) -> str:
+        """
+        Cancel a running workflow.
+
+        Returns formatted string with cancellation confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            run = gh_repo.get_workflow_run(run_id)
+
+            # Check if run is cancellable
+            if run.status == "completed":
+                return f"Cannot cancel completed workflow run #{run_id}"
+
+            # Cancel the run
+            result = run.cancel()
+
+            if result:
+                return (
+                    f"✓ Cancelled workflow run #{run_id} in {repo_full_name}\n"
+                    f"Workflow: {run.name}\n"
+                    f"Previous status: {run.status}\n"
+                    f"URL: {run.html_url}\n"
+                )
+            else:
+                return f"Failed to cancel workflow run #{run_id}"
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Workflow run #{run_id} not found in {repo}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error cancelling workflow run: {str(e)}"
+
     def close(self) -> None:
         """Close GitHub connection."""
         if self.github:
@@ -405,10 +1289,26 @@ def create_github_tools(config: AgentConfig) -> List:
 
     # Return list of bound methods that work as agent tools
     return [
+        # Issues (7 tools)
         tools_instance.list_issues,
         tools_instance.get_issue,
+        tools_instance.get_issue_comments,
         tools_instance.create_issue,
         tools_instance.update_issue,
         tools_instance.add_issue_comment,
         tools_instance.search_issues,
+        # Pull Requests (7 tools)
+        tools_instance.list_pull_requests,
+        tools_instance.get_pull_request,
+        tools_instance.get_pr_comments,
+        tools_instance.create_pull_request,
+        tools_instance.update_pull_request,
+        tools_instance.merge_pull_request,
+        tools_instance.add_pr_comment,
+        # Workflows/Actions (5 tools)
+        tools_instance.list_workflows,
+        tools_instance.list_workflow_runs,
+        tools_instance.get_workflow_run,
+        tools_instance.trigger_workflow,
+        tools_instance.cancel_workflow_run,
     ]

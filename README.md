@@ -1,13 +1,18 @@
 # SPI Agent
 
-AI-powered GitHub Issues management for OSDU SPI services. Chat with your repositories using natural la## Example Promptsge.
+AI-powered GitHub management for OSDU SPI services. Chat with your repositories using natural language.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-SPI Agent provides a conversational interface for managing GitHub issues across OSDU SPI service repositories. Ask for status, create issues, or add comments without leaving your terminal.
+SPI Agent provides a conversational interface for managing GitHub **Issues**, **Pull Requests**, and **Workflows** across OSDU SPI service repositories. Perform comprehensive GitHub operations without leaving your terminal.
+
+**19 GitHub Tools Available:**
+- 🐛 **Issues**: List, read, create, update, comment, search
+- 🔀 **Pull Requests**: List, read, create, update, merge, comment
+- ⚙️ **Workflows**: List, monitor runs, trigger, cancel
 
 ```bash
 You: List all open issues in partition
