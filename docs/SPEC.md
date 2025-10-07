@@ -76,7 +76,7 @@ spi.py -q -p "How many issues?"  # Quiet mode
 
 ## GitHub Tools
 
-The agent has access to **19 GitHub tools** across three domains:
+The agent has access to **21 GitHub tools** across four domains:
 
 ### Issues (7 tools)
 
@@ -216,6 +216,37 @@ Cancels a running or queued workflow.
 **Examples:**
 - "Cancel workflow run #123"
 - "Stop run #456"
+
+### Code Scanning (2 tools)
+
+#### 20. List Code Scanning Alerts
+Lists code scanning alerts in a repository with filtering.
+
+**Examples:**
+- "List code scanning alerts in partition"
+- "Show me critical security alerts in legal"
+- "List open code scanning alerts in entitlements"
+
+#### 21. Get Code Scanning Alert
+Retrieves detailed information about a specific code scanning alert.
+
+**Examples:**
+- "Tell me about code scanning alert #5 in partition"
+- "Show details for security alert #3"
+- "Look at https://github.com/danielscholl-osdu/partition/security/code-scanning/5"
+
+**What you get:**
+- Alert severity (critical, high, medium, low)
+- Rule information (ID, name, description)
+- Affected file path and line numbers
+- Security tags and CWE identifiers
+- Tool information (e.g., CodeQL version)
+- Remediation guidance
+- Dismissal information (if dismissed)
+
+**URL Handling:**
+The agent can intelligently parse GitHub URLs for code scanning alerts:
+- `https://github.com/org/repo/security/code-scanning/5` → extracts alert #5
 
 ## Configuration
 

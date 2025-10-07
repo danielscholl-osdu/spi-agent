@@ -1,5 +1,6 @@
 """Tests for GitHub tools module."""
 
+import copy
 from datetime import datetime
 from typing import Any
 from unittest.mock import Mock
@@ -883,3 +884,253 @@ def test_cancel_workflow_run_not_found(
     result = tools.cancel_workflow_run(repo="test-repo1", run_id=999)
 
     assert "not found" in result.lower()
+
+
+# ============ CODE SCANNING TESTS ============
+
+
+def test_list_code_scanning_alerts_success(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_code_scanning: Mock
+):
+    """Test successful code scanning alert listing."""
+    tools = GitHubTools(test_config)
+
+    result = tools.list_code_scanning_alerts(repo="test-repo1")
+
+    assert "Found 1 code scanning alert(s)" in result
+    assert "Alert #5: SQL Injection" in result
+    assert "High" in result or "high" in result
+    assert "src/api/query.js" in result
+    assert "Open" in result or "open" in result
+
+
+def test_list_code_scanning_alerts_with_state(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_code_scanning: Mock
+):
+    """Test listing code scanning alerts with state filter."""
+    tools = GitHubTools(test_config)
+
+    result = tools.list_code_scanning_alerts(repo="test-repo1", state="dismissed")
+
+    # Verify API was called with correct parameters
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.assert_called_once()
+    call_args = mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.call_args
+
+    assert "state" in call_args[1]["parameters"]
+    assert call_args[1]["parameters"]["state"] == "dismissed"
+
+
+def test_list_code_scanning_alerts_with_severity_filter(
+    test_config: AgentConfig,
+    mock_github: Mock,
+    mock_github_repo_with_code_scanning: Mock,
+    mock_code_scanning_alert: dict[str, Any],
+):
+    """Test listing code scanning alerts with severity filter."""
+    # Mock multiple alerts with different severities
+    high_alert = copy.deepcopy(mock_code_scanning_alert)
+    high_alert["rule"]["security_severity_level"] = "high"
+
+    low_alert = copy.deepcopy(mock_code_scanning_alert)
+    low_alert["number"] = 6
+    low_alert["rule"]["security_severity_level"] = "low"
+
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.return_value = (
+        {},
+        [high_alert, low_alert],
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.list_code_scanning_alerts(repo="test-repo1", severity="high")
+
+    # Should only show high severity alert
+    assert "Alert #5" in result
+    assert "Alert #6" not in result
+
+
+def test_list_code_scanning_alerts_no_results(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_code_scanning: Mock
+):
+    """Test listing code scanning alerts with no results."""
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.return_value = ({}, [])
+
+    tools = GitHubTools(test_config)
+    result = tools.list_code_scanning_alerts(repo="test-repo1")
+
+    assert "No open code scanning alerts found" in result
+
+
+def test_list_code_scanning_alerts_access_denied(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_code_scanning: Mock
+):
+    """Test listing code scanning alerts with access denied."""
+    error_data = {"message": "Resource not accessible"}
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.side_effect = (
+        GithubException(403, error_data)
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.list_code_scanning_alerts(repo="test-repo1")
+
+    assert "Access denied" in result
+    assert "security_events" in result
+
+
+def test_get_code_scanning_alert_success(
+    test_config: AgentConfig,
+    mock_github: Mock,
+    mock_github_repo_with_code_scanning: Mock,
+    mock_code_scanning_alert: dict[str, Any],
+):
+    """Test successfully getting a code scanning alert."""
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.return_value = (
+        {},
+        mock_code_scanning_alert,
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.get_code_scanning_alert(repo="test-repo1", alert_number=5)
+
+    assert "Code Scanning Alert #5" in result
+    assert "SQL Injection" in result
+    assert "src/api/query.js" in result
+    assert "Lines: 42-45" in result
+    assert "High" in result or "high" in result
+    assert "CodeQL" in result
+    assert "Open" in result or "open" in result
+
+
+def test_get_code_scanning_alert_dismissed(
+    test_config: AgentConfig,
+    mock_github: Mock,
+    mock_github_repo_with_code_scanning: Mock,
+    mock_code_scanning_alert_dismissed: dict[str, Any],
+):
+    """Test getting a dismissed code scanning alert."""
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.return_value = (
+        {},
+        mock_code_scanning_alert_dismissed,
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.get_code_scanning_alert(repo="test-repo1", alert_number=10)
+
+    assert "Code Scanning Alert #10" in result
+    assert "Path Injection" in result
+    assert "Dismissed" in result or "dismissed" in result
+    assert "false positive" in result
+    assert "securityteam" in result
+    assert "This is actually safe due to input validation" in result
+
+
+def test_get_code_scanning_alert_not_found(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_code_scanning: Mock
+):
+    """Test getting non-existent code scanning alert."""
+    error_data = {"message": "Not Found"}
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.side_effect = (
+        GithubException(404, error_data)
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.get_code_scanning_alert(repo="test-repo1", alert_number=999)
+
+    assert "not found" in result.lower()
+
+
+def test_get_code_scanning_alert_access_denied(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_code_scanning: Mock
+):
+    """Test getting code scanning alert with access denied."""
+    error_data = {"message": "Resource not accessible"}
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.side_effect = (
+        GithubException(403, error_data)
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.get_code_scanning_alert(repo="test-repo1", alert_number=5)
+
+    assert "Access denied" in result
+    assert "security_events" in result
+
+
+def test_format_code_scanning_alert(test_config: AgentConfig, mock_code_scanning_alert: dict[str, Any]):
+    """Test formatting code scanning alert data."""
+    tools = GitHubTools(test_config)
+    formatted = tools._format_code_scanning_alert(mock_code_scanning_alert)
+
+    assert formatted["number"] == 5
+    assert formatted["state"] == "open"
+    assert formatted["rule_id"] == "js/sql-injection"
+    assert formatted["rule_name"] == "SQL Injection"
+    assert formatted["rule_security_severity_level"] == "high"
+    assert formatted["tool_name"] == "CodeQL"
+    assert formatted["tool_version"] == "2.15.0"
+    assert formatted["file_path"] == "src/api/query.js"
+    assert formatted["start_line"] == 42
+    assert formatted["end_line"] == 45
+    assert formatted["message"] == "This SQL query depends on a user-provided value."
+
+
+def test_format_code_scanning_alert_with_nulls(
+    test_config: AgentConfig, mock_code_scanning_alert_with_nulls: dict[str, Any]
+):
+    """Test formatting code scanning alert with None values (edge case)."""
+    tools = GitHubTools(test_config)
+    formatted = tools._format_code_scanning_alert(mock_code_scanning_alert_with_nulls)
+
+    # Should handle None values gracefully
+    assert formatted["number"] == 15
+    assert formatted["state"] == "fixed"
+    assert formatted["rule_id"] == "js/unused-variable"
+    assert formatted["rule_name"] == "Unused Variable"
+    assert formatted["rule_security_severity_level"] == "unknown"  # None → "unknown"
+    assert formatted["rule_description"] == ""  # None → ""
+    assert formatted["rule_tags"] == []  # None → []
+    assert formatted["tool_name"] == "ESLint"
+    assert formatted["tool_version"] == "unknown"  # None → "unknown"
+    assert formatted["file_path"] == "unknown"  # No instance → "unknown"
+    assert formatted["start_line"] is None  # No instance → None
+    assert formatted["message"] == ""  # No instance → ""
+    assert formatted["ref"] == "unknown"  # No instance → "unknown"
+
+
+def test_list_code_scanning_alerts_with_null_severity(
+    test_config: AgentConfig,
+    mock_github: Mock,
+    mock_github_repo_with_code_scanning: Mock,
+    mock_code_scanning_alert_with_nulls: dict[str, Any],
+):
+    """Test listing alerts when security_severity_level is None."""
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.return_value = (
+        {},
+        [mock_code_scanning_alert_with_nulls],
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.list_code_scanning_alerts(repo="test-repo1")
+
+    # Should not crash and should display "Unknown" for severity
+    assert "Alert #15: Unused Variable" in result
+    assert "Unknown" in result or "unknown" in result
+
+
+def test_get_code_scanning_alert_with_null_severity(
+    test_config: AgentConfig,
+    mock_github: Mock,
+    mock_github_repo_with_code_scanning: Mock,
+    mock_code_scanning_alert_with_nulls: dict[str, Any],
+):
+    """Test getting alert details when security_severity_level is None."""
+    mock_github_repo_with_code_scanning._requester.requestJsonAndCheck.return_value = (
+        {},
+        mock_code_scanning_alert_with_nulls,
+    )
+
+    tools = GitHubTools(test_config)
+    result = tools.get_code_scanning_alert(repo="test-repo1", alert_number=15)
+
+    # Should not crash and should display "Unknown" for severity
+    assert "Code Scanning Alert #15" in result
+    assert "Unused Variable" in result
+    assert "Unknown" in result or "unknown" in result

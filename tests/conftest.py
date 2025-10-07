@@ -231,3 +231,142 @@ def mock_github_repo_with_workflows(mock_github_repo: Mock, mock_workflow: Mock,
     mock_github_repo.get_workflow_runs.return_value = [mock_workflow_run]
     mock_github_repo.get_workflow_run.return_value = mock_workflow_run
     return mock_github_repo
+
+
+@pytest.fixture
+def mock_code_scanning_alert() -> dict[str, Any]:
+    """Create a mock code scanning alert response from GitHub API."""
+    return {
+        "number": 5,
+        "state": "open",
+        "dismissed_reason": None,
+        "dismissed_comment": None,
+        "dismissed_by": None,
+        "dismissed_at": None,
+        "created_at": "2025-01-06T10:00:00Z",
+        "updated_at": "2025-01-06T12:00:00Z",
+        "html_url": "https://github.com/test-org/test-repo1/security/code-scanning/5",
+        "rule": {
+            "id": "js/sql-injection",
+            "name": "SQL Injection",
+            "description": "Unsanitized user input flows into a SQL query",
+            "severity": "error",
+            "security_severity_level": "high",
+            "tags": ["security", "external/cwe/cwe-89"],
+        },
+        "tool": {
+            "name": "CodeQL",
+            "version": "2.15.0",
+        },
+        "most_recent_instance": {
+            "ref": "refs/heads/main",
+            "state": "open",
+            "commit_sha": "abc123def456789",
+            "analysis_key": ".github/workflows/codeql.yml:analyze",
+            "message": {
+                "text": "This SQL query depends on a user-provided value.",
+            },
+            "location": {
+                "path": "src/api/query.js",
+                "start_line": 42,
+                "end_line": 45,
+                "start_column": 10,
+                "end_column": 30,
+            },
+        },
+    }
+
+
+@pytest.fixture
+def mock_code_scanning_alert_dismissed() -> dict[str, Any]:
+    """Create a mock dismissed code scanning alert."""
+    return {
+        "number": 10,
+        "state": "dismissed",
+        "dismissed_reason": "false positive",
+        "dismissed_comment": "This is actually safe due to input validation",
+        "dismissed_by": {"login": "securityteam"},
+        "dismissed_at": "2025-01-07T10:00:00Z",
+        "created_at": "2025-01-05T10:00:00Z",
+        "updated_at": "2025-01-07T10:00:00Z",
+        "html_url": "https://github.com/test-org/test-repo1/security/code-scanning/10",
+        "rule": {
+            "id": "js/path-injection",
+            "name": "Path Injection",
+            "description": "User input flows into file path construction",
+            "severity": "warning",
+            "security_severity_level": "medium",
+            "tags": ["security", "external/cwe/cwe-22"],
+        },
+        "tool": {
+            "name": "CodeQL",
+            "version": "2.15.0",
+        },
+        "most_recent_instance": {
+            "ref": "refs/heads/main",
+            "state": "dismissed",
+            "commit_sha": "xyz789abc123",
+            "analysis_key": ".github/workflows/codeql.yml:analyze",
+            "message": {
+                "text": "This path construction depends on untrusted data.",
+            },
+            "location": {
+                "path": "src/utils/files.js",
+                "start_line": 15,
+                "end_line": 15,
+                "start_column": 5,
+                "end_column": 50,
+            },
+        },
+    }
+
+
+@pytest.fixture
+def mock_code_scanning_alert_with_nulls() -> dict[str, Any]:
+    """Create a mock code scanning alert with None values (edge case)."""
+    return {
+        "number": 15,
+        "state": "fixed",
+        "dismissed_reason": None,
+        "dismissed_comment": None,
+        "dismissed_by": None,
+        "dismissed_at": None,
+        "created_at": "2025-01-01T10:00:00Z",
+        "updated_at": "2025-01-08T10:00:00Z",
+        "html_url": "https://github.com/test-org/test-repo1/security/code-scanning/15",
+        "rule": {
+            "id": "js/unused-variable",
+            "name": "Unused Variable",
+            "description": None,  # Can be None
+            "severity": "warning",
+            "security_severity_level": None,  # Can be None!
+            "tags": None,  # Can be None
+        },
+        "tool": {
+            "name": "ESLint",
+            "version": None,  # Can be None
+        },
+        "most_recent_instance": None,  # Can be None for fixed alerts!
+    }
+
+
+@pytest.fixture
+def mock_github_repo_with_code_scanning(
+    mock_github_repo: Mock, mock_code_scanning_alert: dict[str, Any]
+) -> Mock:
+    """Enhance mock repository with code scanning support."""
+    # Mock the _requester for direct API calls
+    mock_requester = Mock()
+
+    # Mock list alerts endpoint
+    mock_requester.requestJsonAndCheck = Mock(
+        return_value=(
+            {},  # headers
+            [mock_code_scanning_alert],  # data
+        )
+    )
+
+    mock_github_repo._requester = mock_requester
+    mock_github_repo.url = "https://api.github.com/repos/test-org/test-repo1"
+
+    return mock_github_repo
