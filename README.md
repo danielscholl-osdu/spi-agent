@@ -7,12 +7,13 @@ AI-powered GitHub management for OSDU SPI services. Chat with your repositories 
 
 ## Overview
 
-SPI Agent provides a conversational interface for managing GitHub **Issues**, **Pull Requests**, and **Workflows** across OSDU SPI service repositories. Perform comprehensive GitHub operations without leaving your terminal.
+SPI Agent provides a conversational interface for managing GitHub **Issues**, **Pull Requests**, **Workflows**, and **Code Scanning** across OSDU SPI service repositories. Perform comprehensive GitHub operations without leaving your terminal.
 
-**19 GitHub Tools Available:**
+**21 GitHub Tools Available:**
 - 🐛 **Issues**: List, read, create, update, comment, search
 - 🔀 **Pull Requests**: List, read, create, update, merge, comment
 - ⚙️ **Workflows**: List, monitor runs, trigger, cancel
+- 🔒 **Code Scanning**: List security alerts, get vulnerability details
 
 ```bash
 You: List all open issues in partition
@@ -28,6 +29,15 @@ Agent: Here are the details for the open issue in danielscholl-osdu/partition:
 • Author: github-actions[bot]
 • Labels: human-required
 • Created / Updated: 2025-10-06T20:21:31+00:00
+
+You: Look at https://github.com/danielscholl-osdu/partition/security/code-scanning/5
+Agent: 🔴 Code Scanning Alert #5: SQL Injection Vulnerability
+       State: Open | Severity: High
+       File: src/api/query.js:42-45
+
+       Unsanitized user input flows into SQL query construction...
+
+       Would you like me to create a tracking issue for this security finding?
 
 You: /fork partition
 Agent: -- Custom workflow results --
