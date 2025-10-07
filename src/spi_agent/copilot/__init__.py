@@ -348,12 +348,17 @@ class CopilotRunner:
                     self.tracker.update(service, "success", "Completed successfully")
                     continue
 
-        # Detect global completion messages
-        if "all requested services have been successfully initialized" in line_lower:
+        # Detect global completion messages (multiple patterns)
+        completion_patterns = [
+            "successfully completed repository initialization",
+            "all repositories are now:",
+            "repository status:",
+        ]
+        if any(pattern in line_lower for pattern in completion_patterns):
             # Mark all pending/running services as success
             for service in self.services:
                 status = self.tracker.services[service]["status"]
-                if status not in ["success", "skipped"]:
+                if status not in ["success", "skipped", "error"]:
                     self.tracker.update(service, "success", "Completed successfully")
 
         # Find currently active service (first non-completed service)
