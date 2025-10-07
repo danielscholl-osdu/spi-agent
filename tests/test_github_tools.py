@@ -652,3 +652,234 @@ def test_add_pr_comment_empty(
     result = tools.add_pr_comment(repo="test-repo1", pr_number=123, comment="   ")
 
     assert "Cannot add empty comment" in result
+
+
+# ============ WORKFLOW TESTS ============
+
+
+def test_list_workflows_success(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow: Mock
+):
+    """Test successful workflow listing."""
+    tools = GitHubTools(test_config)
+
+    result = tools.list_workflows(repo="test-repo1")
+
+    assert "Workflows in test-org/test-repo1" in result
+    assert "Build and Test" in result
+    assert "build.yml" in result
+    assert "ID: 12345678" in result
+    assert "State: active" in result
+
+
+def test_list_workflows_no_results(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock
+):
+    """Test workflow listing with no results."""
+    mock_github_repo_with_workflows.get_workflows.return_value = []
+
+    tools = GitHubTools(test_config)
+    result = tools.list_workflows(repo="test-repo1")
+
+    assert "No workflows found" in result
+
+
+def test_list_workflow_runs_success(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow_run: Mock
+):
+    """Test successful workflow run listing."""
+    tools = GitHubTools(test_config)
+
+    result = tools.list_workflow_runs(repo="test-repo1")
+
+    assert "Recent workflow runs in test-org/test-repo1" in result
+    assert "Build and Test - Run #987654321" in result
+    assert "completed" in result
+    assert "success" in result
+    assert "main" in result
+
+
+def test_list_workflow_runs_no_results(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock
+):
+    """Test workflow run listing with no results."""
+    mock_github_repo_with_workflows.get_workflow_runs.return_value = []
+
+    tools = GitHubTools(test_config)
+    result = tools.list_workflow_runs(repo="test-repo1")
+
+    assert "No workflow runs found" in result
+
+
+def test_list_workflow_runs_with_filters(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow_run: Mock
+):
+    """Test workflow run listing with status and branch filters."""
+    tools = GitHubTools(test_config)
+
+    result = tools.list_workflow_runs(repo="test-repo1", status="completed", branch="main")
+
+    assert "Recent workflow runs" in result
+    # Verify the filters were applied (run matches both filters)
+    assert "Build and Test" in result
+
+
+def test_get_workflow_run_success(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow_run: Mock
+):
+    """Test successful workflow run retrieval."""
+    tools = GitHubTools(test_config)
+
+    result = tools.get_workflow_run(repo="test-repo1", run_id=987654321)
+
+    assert "Workflow Run #987654321" in result
+    assert "Build and Test" in result
+    assert "Status: ✓ completed" in result
+    assert "Conclusion: success" in result
+    assert "Branch: main" in result
+    assert "Commit: abc123d" in result
+    assert "Triggered by: push" in result
+    assert "Actor: testuser" in result
+    assert "Jobs (2):" in result
+    assert "lint" in result
+    assert "test" in result
+
+
+def test_get_workflow_run_not_found(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock
+):
+    """Test getting non-existent workflow run."""
+    error_data = {"message": "Not Found"}
+    mock_github_repo_with_workflows.get_workflow_run.side_effect = GithubException(404, error_data)
+
+    tools = GitHubTools(test_config)
+    result = tools.get_workflow_run(repo="test-repo1", run_id=999)
+
+    assert "not found" in result.lower()
+
+
+def test_trigger_workflow_success(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow: Mock
+):
+    """Test successful workflow trigger."""
+    tools = GitHubTools(test_config)
+
+    result = tools.trigger_workflow(
+        repo="test-repo1",
+        workflow_name_or_id="build.yml",
+        ref="main"
+    )
+
+    assert "✓ Triggered workflow" in result
+    assert "Build and Test" in result
+    assert "Branch: main" in result
+    mock_workflow.create_dispatch.assert_called_once()
+
+
+def test_trigger_workflow_with_inputs(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow: Mock
+):
+    """Test workflow trigger with JSON inputs."""
+    tools = GitHubTools(test_config)
+
+    result = tools.trigger_workflow(
+        repo="test-repo1",
+        workflow_name_or_id="build.yml",
+        ref="main",
+        inputs='{"environment": "prod", "version": "1.0"}'
+    )
+
+    assert "✓ Triggered workflow" in result
+    mock_workflow.create_dispatch.assert_called_once()
+    call_args = mock_workflow.create_dispatch.call_args
+    assert call_args[1]["ref"] == "main"
+    assert call_args[1]["inputs"] == {"environment": "prod", "version": "1.0"}
+
+
+def test_trigger_workflow_invalid_json(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock
+):
+    """Test workflow trigger with invalid JSON inputs."""
+    tools = GitHubTools(test_config)
+
+    result = tools.trigger_workflow(
+        repo="test-repo1",
+        workflow_name_or_id="build.yml",
+        ref="main",
+        inputs='{"bad json'
+    )
+
+    assert "Invalid JSON" in result
+
+
+def test_trigger_workflow_non_string_input(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock
+):
+    """Test workflow trigger with non-string input values."""
+    tools = GitHubTools(test_config)
+
+    result = tools.trigger_workflow(
+        repo="test-repo1",
+        workflow_name_or_id="build.yml",
+        ref="main",
+        inputs='{"count": 5}'
+    )
+
+    assert "must be string" in result
+
+
+def test_trigger_workflow_not_found(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock
+):
+    """Test triggering non-existent workflow."""
+    mock_github_repo_with_workflows.get_workflow.side_effect = Exception("Not found")
+
+    tools = GitHubTools(test_config)
+    result = tools.trigger_workflow(
+        repo="test-repo1",
+        workflow_name_or_id="nonexistent.yml",
+        ref="main"
+    )
+
+    assert "not found" in result.lower()
+
+
+def test_cancel_workflow_run_success(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow_run: Mock
+):
+    """Test successful workflow run cancellation."""
+    mock_workflow_run.status = "in_progress"
+
+    tools = GitHubTools(test_config)
+
+    result = tools.cancel_workflow_run(repo="test-repo1", run_id=987654321)
+
+    assert "✓ Cancelled workflow run #987654321" in result
+    assert "Build and Test" in result
+    assert "Previous status: in_progress" in result
+    mock_workflow_run.cancel.assert_called_once()
+
+
+def test_cancel_workflow_run_already_completed(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock, mock_workflow_run: Mock
+):
+    """Test canceling already completed run."""
+    mock_workflow_run.status = "completed"
+
+    tools = GitHubTools(test_config)
+    result = tools.cancel_workflow_run(repo="test-repo1", run_id=987654321)
+
+    assert "Cannot cancel completed workflow run" in result
+
+
+def test_cancel_workflow_run_not_found(
+    test_config: AgentConfig, mock_github: Mock, mock_github_repo_with_workflows: Mock
+):
+    """Test canceling non-existent workflow run."""
+    error_data = {"message": "Not Found"}
+    mock_github_repo_with_workflows.get_workflow_run.side_effect = GithubException(404, error_data)
+
+    tools = GitHubTools(test_config)
+    result = tools.cancel_workflow_run(repo="test-repo1", run_id=999)
+
+    assert "not found" in result.lower()

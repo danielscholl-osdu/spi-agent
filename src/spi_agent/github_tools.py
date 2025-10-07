@@ -767,6 +767,12 @@ class GitHubTools:
         ] = None,
         draft: Annotated[Optional[bool], Field(description="Toggle draft status")] = None,
         base_branch: Annotated[Optional[str], Field(description="New base branch")] = None,
+        labels: Annotated[
+            Optional[str], Field(description="Comma-separated labels (replaces existing)")
+        ] = None,
+        assignees: Annotated[
+            Optional[str], Field(description="Comma-separated assignees (replaces existing)")
+        ] = None,
     ) -> str:
         """
         Update pull request metadata.
@@ -778,14 +784,17 @@ class GitHubTools:
             gh_repo = self.github.get_repo(repo_full_name)
             pr = gh_repo.get_pull(pr_number)
 
-            # Build update parameters
+            # Build update parameters for PR
             update_params = {}
+            updated_fields = []
 
             if title is not None:
                 update_params["title"] = title
+                updated_fields.append("title")
 
             if body is not None:
                 update_params["body"] = body
+                updated_fields.append("body")
 
             if state is not None:
                 if state.lower() not in ["open", "closed"]:
@@ -793,17 +802,41 @@ class GitHubTools:
                 if pr.merged:
                     return f"Cannot change state of merged PR #{pr_number}"
                 update_params["state"] = state.lower()
+                updated_fields.append("state")
 
             if draft is not None:
                 update_params["draft"] = draft
+                updated_fields.append("draft")
 
             if base_branch is not None:
                 update_params["base"] = base_branch
+                updated_fields.append("base")
 
-            # Apply updates
-            pr.edit(**update_params)
+            # Apply PR updates
+            if update_params:
+                pr.edit(**update_params)
 
-            updates_made = ", ".join(update_params.keys())
+            # Handle labels and assignees via issue interface
+            issue_params = {}
+            if labels is not None:
+                label_list = [l.strip() for l in labels.split(",") if l.strip()]
+                issue_params["labels"] = label_list
+                updated_fields.append("labels")
+
+            if assignees is not None:
+                assignee_list = [a.strip() for a in assignees.split(",") if a.strip()]
+                issue_params["assignees"] = assignee_list
+                updated_fields.append("assignees")
+
+            # Apply issue updates (labels/assignees)
+            if issue_params:
+                issue = pr.as_issue()
+                issue.edit(**issue_params)
+
+            if not updated_fields:
+                return f"No updates specified for PR #{pr_number}"
+
+            updates_made = ", ".join(updated_fields)
             return (
                 f"✓ Updated pull request #{pr_number} in {repo_full_name}\n"
                 f"Updated fields: {updates_made}\n"
@@ -1100,8 +1133,17 @@ class GitHubTools:
 
             # Get jobs
             try:
-                jobs = run.jobs()
-                job_list = list(jobs)[:10]  # Limit to first 10 jobs
+                jobs_paginated = run.get_jobs()
+                job_list = []
+                count = 0
+                for job in jobs_paginated:
+                    job_list.append(job)
+                    count += 1
+                    if count >= 10:  # Limit to first 10 jobs
+                        break
+
+                total_jobs = jobs_paginated.totalCount
+
                 if job_list:
                     output.append(f"\nJobs ({len(job_list)}):\n")
                     for job in job_list:
@@ -1115,8 +1157,8 @@ class GitHubTools:
                             output.append(f" ({job.conclusion})")
                         output.append(f"\n")
 
-                    if len(list(jobs)) > 10:
-                        output.append(f"  ... and {len(list(jobs)) - 10} more jobs\n")
+                    if total_jobs > 10:
+                        output.append(f"  ... and {total_jobs - 10} more jobs\n")
             except:
                 pass  # Jobs may not be available for all runs
 

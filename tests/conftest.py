@@ -162,3 +162,72 @@ def mock_github_repo_with_pr(mock_github_repo: Mock, mock_github_pr: Mock) -> Mo
     mock_github_repo.get_pull.return_value = mock_github_pr
     mock_github_repo.create_pull.return_value = mock_github_pr
     return mock_github_repo
+
+
+@pytest.fixture
+def mock_workflow() -> Mock:
+    """Create a mock GitHub workflow object."""
+    workflow = Mock()
+    workflow.id = 12345678
+    workflow.name = "Build and Test"
+    workflow.path = ".github/workflows/build.yml"
+    workflow.state = "active"
+    workflow.created_at = datetime(2025, 1, 1, 10, 0, 0)
+    workflow.updated_at = datetime(2025, 1, 6, 10, 0, 0)
+    workflow.html_url = "https://github.com/test-org/test-repo1/actions/workflows/build.yml"
+    workflow.create_dispatch = Mock(return_value=True)
+    workflow.get_runs = Mock()
+    return workflow
+
+
+@pytest.fixture
+def mock_workflow_run() -> Mock:
+    """Create a mock GitHub workflow run object."""
+    run = Mock()
+    run.id = 987654321
+    run.name = "Build and Test"
+    run.workflow_id = 12345678
+    run.status = "completed"
+    run.conclusion = "success"
+    run.head_branch = "main"
+    run.head_sha = "abc123def456"
+    run.event = "push"
+    run.created_at = datetime(2025, 1, 6, 10, 0, 0)
+    run.updated_at = datetime(2025, 1, 6, 10, 5, 0)
+    run.run_started_at = datetime(2025, 1, 6, 10, 0, 15)
+    run.html_url = "https://github.com/test-org/test-repo1/actions/runs/987654321"
+
+    # Actor
+    actor = Mock()
+    actor.login = "testuser"
+    run.actor = actor
+
+    # Mock jobs
+    job1 = Mock()
+    job1.name = "lint"
+    job1.status = "completed"
+    job1.conclusion = "success"
+
+    job2 = Mock()
+    job2.name = "test"
+    job2.status = "completed"
+    job2.conclusion = "success"
+
+    jobs_paginated = Mock()
+    jobs_paginated.__iter__ = Mock(return_value=iter([job1, job2]))
+    jobs_paginated.totalCount = 2
+
+    run.get_jobs = Mock(return_value=jobs_paginated)
+    run.cancel = Mock(return_value=True)
+
+    return run
+
+
+@pytest.fixture
+def mock_github_repo_with_workflows(mock_github_repo: Mock, mock_workflow: Mock, mock_workflow_run: Mock) -> Mock:
+    """Enhance mock repository with workflow support."""
+    mock_github_repo.get_workflows.return_value = [mock_workflow]
+    mock_github_repo.get_workflow.return_value = mock_workflow
+    mock_github_repo.get_workflow_runs.return_value = [mock_workflow_run]
+    mock_github_repo.get_workflow_run.return_value = mock_workflow_run
+    return mock_github_repo
