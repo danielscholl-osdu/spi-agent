@@ -155,9 +155,7 @@ pytest
 
 ## Documentation
 
-- [📖 Technical Specification](docs/SPEC.md) - Architecture, tools, and API details
-- [📋 CLI Usage Guide](docs/SPI_CLI.md) - Complete command reference
-- [⚙️ Copilot Workflows](docs/COPILOT.md) - Fork and status automation (optional)
+- [📖 Technical Specification](specs/init_spec.md) - Complete architecture, tools, implementation plan, and acceptance criteria
 
 
 ## License

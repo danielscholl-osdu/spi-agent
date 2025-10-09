@@ -12,9 +12,10 @@
 Enhanced Copilot CLI Wrapper with Rich Console Output
 
 Usage:
-    uv run copilot.py fork --services partition,legal --branch main
-    uv run copilot.py fork --services all
-    uv run copilot.py fork --services partition
+    spi-agent fork --services partition,legal --branch main
+    spi-agent fork --services all
+    spi-agent fork --services partition
+    spi-agent status --services partition
 """
 
 import argparse
