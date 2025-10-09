@@ -25,6 +25,7 @@ import re
 import signal
 import subprocess
 import sys
+import textwrap
 from collections import deque
 from datetime import datetime
 from importlib import resources
@@ -751,57 +752,117 @@ class StatusRunner:
 
     def extract_json(self, output: str) -> Optional[Dict]:
         """Extract JSON from copilot output (may be wrapped in markdown)"""
-        # Try to find JSON in output
-        # Copilot might wrap it in ```json ... ```
+        # Prefer explicit JSON code fences if present
+        code_blocks = re.findall(r'```(?:json)?\s*\n(.*?)\n\s*```', output, re.DOTALL)
+        for block in code_blocks:
+            data = self._parse_json_candidate(block, "code fence")
+            if data:
+                return data
 
-        # First try: Look for JSON code fence (non-greedy for inner content)
-        json_match = re.search(r'```(?:json)?\s*\n(\{.*?\})\s*\n```', output, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except json.JSONDecodeError as e:
-                console.print(f"[dim]JSON fence parse failed: {e}[/dim]")
+        # Fallback: scan for the first balanced JSON object in the output
+        data = self._scan_for_json_object(output, "brace scan")
+        if data:
+            return data
 
-        # Second try: Find largest JSON object with balanced braces
-        # Look for opening { and try to find matching closing }
-        first_brace = output.find('{')
-        if first_brace != -1:
-            # Count braces to find the matching closing brace
-            brace_count = 0
-            start = first_brace
-            for i in range(first_brace, len(output)):
-                if output[i] == '{':
-                    brace_count += 1
-                elif output[i] == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        # Found matching closing brace
-                        json_str = output[start:i+1]
-                        try:
-                            data = json.loads(json_str)
-                            # Validate it has expected structure
-                            if isinstance(data, dict):
-                                return data
-                        except json.JSONDecodeError as e:
-                            console.print(f"[dim]Brace-matched JSON parse failed: {e}[/dim]")
-                            break
-
-        # Third try: Look for JSON with "services" key (for backwards compat)
+        # Backwards compatibility: look for a block that clearly contains services data
         json_match = re.search(r'(\{[\s\S]*?"services"[\s\S]*?\})\s*$', output, re.MULTILINE)
         if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # Fourth try: Entire output might be JSON
-        try:
-            data = json.loads(output.strip())
-            if isinstance(data, dict):
+            data = self._parse_json_candidate(json_match.group(1), '"services" fallback')
+            if data:
                 return data
-        except json.JSONDecodeError:
-            pass
 
+        # Last resort: treat entire output as JSON
+        data = self._parse_json_candidate(output, "entire output")
+        if data:
+            return data
+
+        console.print("[yellow]Warning:[/yellow] Could not extract JSON from any known format")
+        return None
+
+    def _parse_json_candidate(self, candidate: str, context: str) -> Optional[Dict]:
+        """Attempt to load a JSON object, repairing wrapped strings if needed."""
+        candidate = textwrap.dedent(candidate).strip()
+        if not candidate:
+            return None
+
+        attempts = [candidate]
+        repaired = self._fix_wrapped_strings(candidate)
+        if repaired != candidate:
+            attempts.append(repaired)
+
+        last_error: Optional[json.JSONDecodeError] = None
+        for attempt in attempts:
+            try:
+                data = json.loads(attempt)
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError as exc:
+                last_error = exc
+
+        if last_error:
+            console.print(f"[dim]{context} JSON parse failed: {last_error}[/dim]")
+        return None
+
+    @staticmethod
+    def _fix_wrapped_strings(text: str) -> str:
+        """Collapse soft-wrapped lines inside JSON string literals."""
+        result: List[str] = []
+        in_string = False
+        escape = False
+        i = 0
+        length = len(text)
+
+        while i < length:
+            ch = text[i]
+
+            if in_string:
+                if escape:
+                    result.append(ch)
+                    escape = False
+                elif ch == '\\':
+                    result.append(ch)
+                    escape = True
+                elif ch == '"':
+                    result.append(ch)
+                    in_string = False
+                elif ch == '\n':
+                    result.append(' ')
+                    i += 1
+                    while i < length and text[i] in (' ', '\t'):
+                        i += 1
+                    continue
+                else:
+                    result.append(ch)
+            else:
+                if ch == '"':
+                    in_string = True
+                result.append(ch)
+
+            if not in_string and ch != '\\':
+                escape = False
+
+            i += 1
+
+        return ''.join(result)
+
+    def _scan_for_json_object(self, text: str, context: str) -> Optional[Dict]:
+        """Search for a balanced JSON object within arbitrary text."""
+        start = text.find('{')
+        while start != -1:
+            brace_count = 0
+            for idx in range(start, len(text)):
+                char = text[idx]
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        chunk = text[start:idx + 1]
+                        data = self._parse_json_candidate(chunk, context)
+                        if data:
+                            return data
+                        break
+            start = text.find('{', start + 1)
         return None
 
     def display_status(self, data: Dict):
