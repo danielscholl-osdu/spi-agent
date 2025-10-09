@@ -4,4 +4,4 @@ argument-hint: [bug-description]
 allowed-tools: Write, Read, Glob, Grep
 ---
 
-@ai-sdlc/planning/bug.md
+@ai-sdlc/planning/bug.xml

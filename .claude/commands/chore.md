@@ -4,4 +4,4 @@ argument-hint: [chore-description]
 allowed-tools: Write, Read, Glob, Grep
 ---
 
-@ai-sdlc/planning/chore.md
+@ai-sdlc/planning/chore.xml

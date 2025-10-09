@@ -4,4 +4,4 @@ argument-hint: [feature-description]
 allowed-tools: Write, Read, Glob, Grep
 ---
 
-@ai-sdlc/planning/feature.md
+@ai-sdlc/planning/feature.xml
