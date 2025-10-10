@@ -125,6 +125,7 @@ FINALIZE:
 <AFTER_ACTION>
 
 REPORT:
-    Summary of things accomplished
+    Output exactly: "✅ Successfully completed workflow for <service_name> service"
+    Then provide summary of things accomplished
 
 </AFTER_ACTION>

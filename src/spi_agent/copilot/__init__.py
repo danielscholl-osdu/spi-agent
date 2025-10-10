@@ -353,6 +353,8 @@ class CopilotRunner:
         # Detect global completion messages (multiple patterns)
         completion_patterns = [
             "successfully completed repository initialization",
+            "successfully completed workflow for",
+            "✅ successfully completed workflow for",
             "all repositories are now:",
             "repository status:",
         ]
