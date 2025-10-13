@@ -466,10 +466,11 @@ class CopilotRunner:
 
         try:
             # Start process with streaming output
+            # Redirect stderr to stdout to avoid blocking issues
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
@@ -1149,10 +1150,11 @@ class StatusRunner:
 
         try:
             # Start process with streaming output
+            # Redirect stderr to stdout to avoid blocking issues
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
@@ -1201,10 +1203,6 @@ class StatusRunner:
 
             if process.returncode != 0:
                 console.print(f"[red]Error:[/red] Copilot failed with exit code {process.returncode}")
-                if process.stderr:
-                    stderr_output = process.stderr.read()
-                    if stderr_output:
-                        console.print(f"[red]Details:[/red] {stderr_output}")
                 return process.returncode
 
             # Extract and parse JSON from full output
