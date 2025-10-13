@@ -3,6 +3,8 @@ CLAUDE.md
 AGENTS.md
 ai-*/
 
+repos/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -59,15 +61,3 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
-
-# Downloaded/cloned repositories (to avoid Java project detection)
-partition/
-entitlements/
-legal/
-schema/
-file/
-storage/
-indexer/
-indexer-queue/
-search/
-workflow/

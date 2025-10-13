@@ -83,13 +83,25 @@ BEFORE:
 </BEFORE_ACTION>
 
 
+<WORKING_DIRECTORY>
+
+DIRECTORY_STRUCTURE:
+    - Create 'repos' directory in PROJECT_ROOT if it doesn't exist
+    - All repository clone and git operations must occur in PROJECT_ROOT/repos/
+    - Repository directory structure: PROJECT_ROOT/repos/{service_name}/
+    - Example: For partition service, use repos/partition/ as the target directory
+
+</WORKING_DIRECTORY>
+
+
 <ACTION_ITEMS>
 
 CREATE_STRATEGY:
     IF BRANCH == 'main':
-        - Create repo directly from template with clone (--clone)
+        - Create repo directly from template with clone (--clone) into repos/{service_name}
     ELSE:
-        - Clone template locally as service name directory
+        - Ensure repos/ directory exists in PROJECT_ROOT
+        - Clone template locally to repos/{service_name} directory
         - Switch to specified BRANCH as main branch
         - Create GitHub repo from local directory (not template)
         - Push local content to GitHub
@@ -116,9 +128,10 @@ ON_FAILURE:
 
 FINALIZE:
     IF branch was switched locally:
-        - Pull latest changes to existing local clone
+        - Pull latest changes to existing local clone in repos/{service_name}
     ELSE:
-        - Clone forked repo from GitHub
+        - Ensure repos/ directory exists in PROJECT_ROOT
+        - Clone forked repo from GitHub into repos/{service_name}
 
 </ACTION_ITEMS>
 

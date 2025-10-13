@@ -17,7 +17,7 @@ SPI Agent provides a conversational interface for managing GitHub **Issues**, **
 
 ```bash
 You: List all open issues in partition
-Agent: Here are the open issues in danielscholl-osdu/partition:
+Agent: I found 1 open issue in partition:
 
 • #2: Configure MCP Server for GitHub Copilot Agent [human-required]
 
