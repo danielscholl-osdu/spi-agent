@@ -92,7 +92,7 @@ def mock_github(monkeypatch: Any, mock_github_client: Mock) -> Mock:
     def mock_github_constructor(*args: Any, **kwargs: Any) -> Mock:
         return mock_github_client
 
-    monkeypatch.setattr("spi_agent.github_tools.Github", mock_github_constructor)
+    monkeypatch.setattr("spi_agent.github.base.Github", mock_github_constructor)
     return mock_github_client
 
 

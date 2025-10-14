@@ -9,7 +9,7 @@ import pytest
 from github import GithubException
 
 from spi_agent.config import AgentConfig
-from spi_agent.github_tools import GitHubTools
+from spi_agent.github import GitHubTools
 
 
 def test_list_issues_success(test_config: AgentConfig, mock_github: Mock, mock_github_issue: Mock):

@@ -8,7 +8,7 @@ from agent_framework.azure import AzureOpenAIResponsesClient
 from azure.identity import AzureCliCredential
 
 from spi_agent.config import AgentConfig
-from spi_agent.github_tools import create_github_tools
+from spi_agent.github import create_github_tools
 
 
 class SPIAgent:
