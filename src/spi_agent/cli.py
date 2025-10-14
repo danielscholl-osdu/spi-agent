@@ -123,7 +123,47 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         )
         return None
 
-    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /help"
+    if cmd == "test":
+        if len(parts) < 2:
+            return "Usage: /test <services> [--provider <provider>]\nExample: /test partition --provider azure"
+
+        services_arg = parts[1]
+        provider = "azure"  # Default to azure
+
+        # Parse --provider flag
+        if "--provider" in parts:
+            provider_idx = parts.index("--provider")
+            if provider_idx + 1 < len(parts):
+                provider = parts[provider_idx + 1]
+
+        try:
+            prompt_file = copilot_module.get_prompt_file("test.md")
+        except FileNotFoundError as exc:  # pragma: no cover - packaging guard
+            return f"Error: {exc}"
+
+        services = copilot_module.parse_services(services_arg)
+        invalid = [s for s in services if s not in copilot_module.SERVICES]
+        if invalid:
+            return f"Error: Invalid service(s): {', '.join(invalid)}"
+
+        console.print(f"\n[yellow]Running Maven tests for: {', '.join(services)} (provider: {provider})[/yellow]\n")
+
+        runner = copilot_module.TestRunner(prompt_file, services, provider)
+        exit_code = runner.run()
+
+        if exit_code == 0:
+            summary = f"Maven tests completed for: {', '.join(services)}"
+        else:
+            summary = f"Maven test command failed with exit code {exit_code} for services: {', '.join(services)}"
+
+        await agent.agent.run(
+            f"SYSTEM NOTE: The user just ran Maven tests. {summary}. "
+            f"Acknowledge this briefly and offer to help analyze the results or fix any issues.",
+            thread=thread,
+        )
+        return None
+
+    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /help"
 
 
 def _render_help() -> None:
@@ -145,6 +185,8 @@ def _render_help() -> None:
 - `/fork partition --branch develop` - Fork with custom branch
 - `/status partition` - Check GitHub status for partition
 - `/status partition,legal` - Check status for multiple repos
+- `/test partition` - Run Maven tests (default: azure provider)
+- `/test partition --provider aws` - Run tests with specific provider
 - `/help` - Show this help
 """
     console.print(Panel(Markdown(help_text), title="💡 Help", border_style="yellow"))
@@ -165,7 +207,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
         console.print()
         console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
         console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-        console.print("[dim]Slash commands: /fork <services>, /status <services>[/dim]\n")
+        console.print("[dim]Slash commands: /fork <services>, /status <services>, /test <services>[/dim]\n")
 
     thread = agent.agent.get_new_thread()
 
@@ -273,12 +315,14 @@ Commands:
   -p PROMPT           Single query mode
   fork                Fork and initialize repositories (requires copilot)
   status              Check GitHub status (requires copilot)
+  test                Run Maven tests for services (requires copilot)
 
 Examples:
   spi-agent                                    # Interactive chat
   spi-agent -p "List issues in partition"      # One-shot query
   spi-agent fork --services partition          # Fork repos
   spi-agent status --services partition,legal  # Check status
+  spi-agent test --services partition          # Run Maven tests
         """,
     )
 
@@ -313,6 +357,24 @@ Examples:
             "-s",
             required=True,
             help="Service name(s): 'all', single name, or comma-separated list",
+        )
+
+        test_parser = subparsers.add_parser(
+            "test",
+            help="Run Maven tests for OSDU SPI service repositories",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        test_parser.add_argument(
+            "--services",
+            "-s",
+            required=True,
+            help="Service name(s): 'all', single name, or comma-separated list",
+        )
+        test_parser.add_argument(
+            "--provider",
+            "-p",
+            default="azure",
+            help="Cloud provider(s): azure, aws, gc, ibm, core, all (default: azure)",
         )
 
     parser.add_argument(
@@ -377,6 +439,32 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             return 1
 
         runner = copilot_module.StatusRunner(prompt_file, services)
+        return runner.run()
+
+    if parsed.command == "test":
+        if not COPILOT_AVAILABLE:
+            console.print("[red]Error:[/red] Copilot module not available", style="bold red")
+            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
+            return 1
+
+        try:
+            prompt_file = copilot_module.get_prompt_file("test.md")
+        except FileNotFoundError as exc:
+            console.print(f"[red]Error:[/red] {exc}", style="bold red")
+            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
+            return 1
+
+        services = copilot_module.parse_services(parsed.services)
+        invalid = [s for s in services if s not in copilot_module.SERVICES]
+        if invalid:
+            console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
+            return 1
+
+        runner = copilot_module.TestRunner(
+            prompt_file,
+            services,
+            parsed.provider,
+        )
         return runner.run()
 
     if parsed.prompt:

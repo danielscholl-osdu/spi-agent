@@ -44,6 +44,9 @@ Agent: -- Custom workflow results --
 
 You: /status legal
 Agent: -- Custom workflow results --
+
+You: /test partition
+Agent: -- Maven test results --
 ```
 
 ## Prerequisites
@@ -122,6 +125,56 @@ Start a conversation with your repositories. Best for exploratory work and follo
 **Help**
 ```bash
 spi-agent --help
+```
+
+### Maven Test Automation
+
+Run Maven builds, tests, and coverage reports for OSDU SPI services:
+
+**Interactive Chat Mode (Slash Command):**
+```bash
+/test partition                           # Default: Azure provider
+/test partition --provider aws            # Specific provider
+/test partition,legal                     # Multiple services
+/test partition --provider azure,aws      # Multiple providers
+```
+
+**CLI Command:**
+```bash
+# Basic usage
+spi-agent test --services partition                    # Default: Azure provider
+spi-agent test --services partition --provider aws     # Specific provider
+spi-agent test --services partition,legal,schema       # Multiple services
+spi-agent test --services all --provider core          # All services, core profile
+
+# Options
+spi-agent test --services partition --compile-only     # Compile only, skip tests
+spi-agent test --services partition --skip-coverage    # Skip coverage report
+```
+
+**Options:**
+- `--services` / `-s`: Service name(s) - 'all', single, or comma-separated
+- `--provider` / `-p`: Cloud provider(s) - azure, aws, gc, ibm, core, all (default: azure)
+- `--compile-only`: Only compile, skip test execution and coverage
+- `--skip-coverage`: Skip coverage report generation
+
+**Prerequisites:**
+- Repositories must be cloned first using `/fork` or `spi-agent fork` command
+- Maven 3.6+ must be installed and available in PATH
+- Java 17+ required
+
+**Output:**
+- Real-time status updates for each service (compile, test, coverage phases)
+- Test results with pass/fail counts
+- Code coverage percentages (line and branch coverage)
+- Detailed logs saved to `logs/test_*.log`
+
+**Example Output:**
+```
+Service         Phase      Status            Tests            Coverage
+partition       test       TEST SUCCESS      42 passed        78%/65%
+legal           compile    COMPILE SUCCESS   -                -
+schema          coverage   TEST SUCCESS      38 passed        82%/70%
 ```
 
 
