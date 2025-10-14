@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from spi_agent.copilot.base import BaseRunner
-from spi_agent.copilot.base.runner import console, current_process
+from spi_agent.copilot.base.runner import console
 from spi_agent.copilot.config import config
 from spi_agent.copilot.constants import SERVICES
 from spi_agent.copilot.models import StatusResponse
@@ -409,7 +409,7 @@ class StatusRunner(BaseRunner):
                 # Highlight human-required issues
                 if "human-required" in data["labels"]:
                     issue_content.append(f"[bold red]#{data['number']}[/bold red] {title}")
-                    issue_content.append(f"   [red]⚠ Requires manual intervention[/red]")
+                    issue_content.append("   [red]⚠ Requires manual intervention[/red]")
                 else:
                     issue_content.append(f"[yellow]#{data['number']}[/yellow] {title}")
 
@@ -457,7 +457,7 @@ class StatusRunner(BaseRunner):
         if total_running > 0:
             next_steps.append(f"[yellow]▶[/yellow] {total_running} workflow(s) still running")
         else:
-            next_steps.append(f"[green]✓[/green] All workflows completed")
+            next_steps.append("[green]✓[/green] All workflows completed")
 
         if next_steps:
             console.print(Panel(
@@ -571,13 +571,13 @@ class StatusRunner(BaseRunner):
             # Validate JSON with Pydantic
             try:
                 validated_data = StatusResponse(**status_data)
-                console.print(f"[dim]✓ Data validated successfully[/dim]\n")
+                console.print("[dim]✓ Data validated successfully[/dim]\n")
 
                 # Convert back to dict for display (with validated data)
                 status_data = validated_data.model_dump()
 
             except ValidationError as e:
-                console.print(f"[yellow]Warning:[/yellow] Data validation failed, using raw data")
+                console.print("[yellow]Warning:[/yellow] Data validation failed, using raw data")
                 console.print(f"[dim]Validation errors: {e.error_count()} field(s)[/dim]\n")
                 # Continue with raw data
 
@@ -609,7 +609,7 @@ class StatusRunner(BaseRunner):
         try:
             with open(self.log_file, "w") as f:
                 f.write(f"{'='*70}\n")
-                f.write(f"Copilot Status Check Log\n")
+                f.write("Copilot Status Check Log\n")
                 f.write(f"{'='*70}\n")
                 f.write(f"Timestamp: {datetime.now().isoformat()}\n")
                 f.write(f"Services: {', '.join(self.services)}\n")

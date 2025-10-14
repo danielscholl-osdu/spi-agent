@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Any
 from unittest.mock import Mock
 
-import pytest
 from github import GithubException
 
 from spi_agent.config import AgentConfig

@@ -11,7 +11,7 @@ from rich.live import Live
 from rich.panel import Panel
 
 from spi_agent.copilot.base import BaseRunner
-from spi_agent.copilot.base.runner import console, current_process
+from spi_agent.copilot.base.runner import console
 from spi_agent.copilot.config import config
 from spi_agent.copilot.trackers import TestTracker
 
@@ -481,7 +481,7 @@ class TestRunner(BaseRunner):
         try:
             with open(self.log_file, "w") as f:
                 f.write(f"{'='*70}\n")
-                f.write(f"Maven Test Execution Log\n")
+                f.write("Maven Test Execution Log\n")
                 f.write(f"{'='*70}\n")
                 f.write(f"Timestamp: {datetime.now().isoformat()}\n")
                 f.write(f"Services: {', '.join(self.services)}\n")
@@ -502,13 +502,13 @@ class TestRunner(BaseRunner):
                         f.write(f"  Quality Grade: {data['quality_grade']} - {data.get('quality_label', 'N/A')}\n")
                         f.write(f"  Quality Summary: {data.get('quality_summary', 'N/A')}\n")
                         if data.get("recommendations"):
-                            f.write(f"  Recommendations:\n")
+                            f.write("  Recommendations:\n")
                             for rec in data["recommendations"][:5]:
                                 f.write(f"    - {rec.get('action', 'N/A')}")
                                 if rec.get("expected_improvement"):
                                     f.write(f" ({rec['expected_improvement']})")
-                                f.write(f"\n")
-                    f.write(f"\n")
+                                f.write("\n")
+                    f.write("\n")
 
                 f.write("\n=== FULL OUTPUT ===\n\n")
                 f.write("\n".join(self.full_output))

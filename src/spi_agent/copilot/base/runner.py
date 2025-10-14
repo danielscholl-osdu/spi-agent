@@ -13,7 +13,7 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 
-from spi_agent.copilot.config import config, log_dir
+from spi_agent.copilot.config import log_dir
 
 console = Console()
 

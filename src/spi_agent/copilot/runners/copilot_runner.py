@@ -7,7 +7,7 @@ from typing import List, Union
 from rich.panel import Panel
 
 from spi_agent.copilot.base import BaseRunner
-from spi_agent.copilot.base.runner import console, current_process
+from spi_agent.copilot.base.runner import console
 from spi_agent.copilot.config import config
 from spi_agent.copilot.trackers import ServiceTracker
 

@@ -69,3 +69,11 @@ def test_config_from_env_var_parsing():
     ):
         config = AgentConfig()
         assert config.repositories == ["partition", "legal", "entitlements"]
+
+
+def test_config_maven_mcp_defaults():
+    """Test Maven MCP default configuration values."""
+    with patch.dict(os.environ, {}, clear=True):
+        config = AgentConfig()
+        assert config.maven_mcp_command == "uvx"
+        assert config.maven_mcp_args == ["mvn-mcp-server"]

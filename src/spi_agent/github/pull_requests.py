@@ -102,7 +102,7 @@ class PullRequestTools(GitHubToolsBase):
             if pr_data["merged"]:
                 output.append(f"Merged: {pr_data['merged_at']}\n")
 
-            output.append(f"\nChanges:\n")
+            output.append("\nChanges:\n")
             output.append(f"  📝 Files changed: {pr_data['changed_files']}\n")
             output.append(f"  ➕ Additions: {pr_data['additions']} lines\n")
             output.append(f"  ➖ Deletions: {pr_data['deletions']} lines\n")
@@ -110,10 +110,10 @@ class PullRequestTools(GitHubToolsBase):
             output.append(f"  💬 Review comments: {pr_data['review_comments_count']}\n")
 
             # Merge readiness
-            output.append(f"\nMerge Readiness:\n")
+            output.append("\nMerge Readiness:\n")
             mergeable = pr_data['mergeable']
             if mergeable is None:
-                output.append(f"  Mergeable: calculating...\n")
+                output.append("  Mergeable: calculating...\n")
             elif mergeable:
                 output.append(f"  Mergeable: yes ({pr_data['mergeable_state']})\n")
             else:

@@ -1,6 +1,5 @@
 """Main SPI Agent implementation."""
 
-import os
 from typing import Optional
 
 from agent_framework import ChatAgent
@@ -19,15 +18,17 @@ class SPIAgent:
     to provide natural language interface for GitHub issue management.
     """
 
-    def __init__(self, config: Optional[AgentConfig] = None):
+    def __init__(self, config: Optional[AgentConfig] = None, mcp_tools: Optional[list] = None):
         """
         Initialize SPI Agent.
 
         Args:
             config: Agent configuration. If None, uses defaults from environment.
+            mcp_tools: Optional list of MCP tools to integrate with agent
         """
         self.config = config or AgentConfig()
         self.github_tools = create_github_tools(self.config)
+        self.mcp_tools = mcp_tools or []
 
         # Agent instructions
         self.instructions = f"""You are an AI assistant specialized in managing GitHub repositories for OSDU SPI services.
@@ -100,6 +101,24 @@ When analyzing code scanning alerts, always:
 - Suggest remediation steps if available
 - Offer to create a tracking issue for the security finding
 
+MAVEN DEPENDENCY MANAGEMENT (when available):
+21. Check single dependency version and discover available updates
+22. Check multiple dependencies in batch for efficiency
+23. List all available versions grouped by tracks (major/minor/patch)
+24. Scan Java projects for security vulnerabilities using Trivy
+25. Analyze POM files for dependency issues and best practices
+
+MAVEN WORKFLOWS:
+- Check versions → Create issues for outdated dependencies
+- Scan for vulnerabilities → Create issues for critical CVEs with severity details
+- Analyze POM → Add comments to existing PRs with recommendations
+- Triage dependencies → Generate comprehensive update plan
+
+MAVEN PROMPTS:
+- Use 'triage' prompt for complete dependency and vulnerability analysis
+- Use 'plan' prompt to generate actionable remediation plans with file locations
+- Both prompts provide comprehensive, audit-ready reports
+
 BEST PRACTICES:
 - Use get_issue_comments or get_pr_comments to understand discussion context before suggesting actions
 - Verify issue/PR state before attempting updates
@@ -107,6 +126,8 @@ BEST PRACTICES:
 - Check workflow run status before triggering new runs
 - Suggest appropriate labels based on issue/PR content
 - For code scanning alerts, include severity and rule information when creating issues
+- When creating issues for Maven vulnerabilities, include CVE IDs, CVSS scores, and affected versions
+- Prioritize critical and high severity vulnerabilities in remediation plans
 """
 
         # Initialize Azure OpenAI client
@@ -134,12 +155,15 @@ BEST PRACTICES:
         # Create chat client
         chat_client = AzureOpenAIResponsesClient(**client_params)
 
-        # Create agent with GitHub tools
+        # Combine GitHub tools with MCP tools if available
+        all_tools = self.github_tools + self.mcp_tools
+
+        # Create agent with all available tools
         # Note: Thread-based memory is built-in - agent remembers within a session
         self.agent = ChatAgent(
             chat_client=chat_client,
             instructions=self.instructions,
-            tools=self.github_tools,
+            tools=all_tools,
             name="SPI GitHub Issues Agent",
         )
 

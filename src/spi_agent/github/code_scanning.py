@@ -182,7 +182,7 @@ class CodeScanningTools(GitHubToolsBase):
             if formatted["rule_tags"]:
                 output.append(f"Tags: {', '.join(formatted['rule_tags'])}\n")
 
-            output.append(f"\n📍 Location:\n")
+            output.append("\n📍 Location:\n")
             output.append(f"  File: {formatted['file_path']}\n")
 
             if formatted["start_line"]:
@@ -202,17 +202,17 @@ class CodeScanningTools(GitHubToolsBase):
 
             # Description
             if formatted["rule_description"]:
-                output.append(f"\n📝 Description:\n")
+                output.append("\n📝 Description:\n")
                 output.append(f"{formatted['rule_description']}\n")
 
             # Message from analysis
             if formatted["message"]:
-                output.append(f"\n💬 Analysis Message:\n")
+                output.append("\n💬 Analysis Message:\n")
                 output.append(f"{formatted['message']}\n")
 
             # Dismissal information
             if formatted["state"] == "dismissed":
-                output.append(f"\n🔕 Dismissal Information:\n")
+                output.append("\n🔕 Dismissal Information:\n")
                 if formatted["dismissed_reason"]:
                     output.append(f"  Reason: {formatted['dismissed_reason']}\n")
                 if formatted["dismissed_by"]:
@@ -223,7 +223,7 @@ class CodeScanningTools(GitHubToolsBase):
                     output.append(f"  Comment: {formatted['dismissed_comment']}\n")
 
             # Timestamps
-            output.append(f"\n⏰ Timeline:\n")
+            output.append("\n⏰ Timeline:\n")
             output.append(f"  Created: {formatted['created_at']}\n")
             output.append(f"  Updated: {formatted['updated_at']}\n")
 

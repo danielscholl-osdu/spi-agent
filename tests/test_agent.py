@@ -102,3 +102,40 @@ def test_agent_has_required_tools():
 
         assert call_kwargs["tools"] == mock_tools
         assert call_kwargs["name"] == "SPI GitHub Issues Agent"
+
+
+def test_agent_with_mcp_tools():
+    """Test that agent can be initialized with MCP tools."""
+    with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
+        "spi_agent.agent.create_github_tools"
+    ) as mock_create_tools, patch("spi_agent.agent.ChatAgent") as mock_chat_agent:
+
+        # Mock GitHub and MCP tools
+        github_tools = [Mock(), Mock()]
+        mcp_tools = [Mock()]
+        mock_create_tools.return_value = github_tools
+
+        agent = SPIAgent(mcp_tools=mcp_tools)
+
+        # Verify ChatAgent was called with combined tools
+        mock_chat_agent.assert_called_once()
+        call_kwargs = mock_chat_agent.call_args[1]
+
+        # Should have both GitHub and MCP tools
+        assert len(call_kwargs["tools"]) == 3
+        assert call_kwargs["tools"] == github_tools + mcp_tools
+
+
+def test_agent_instructions_include_maven_capabilities(test_config: AgentConfig):
+    """Test that agent instructions include Maven MCP capabilities."""
+    with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
+        "spi_agent.agent.create_github_tools"
+    ), patch("spi_agent.agent.ChatAgent"):
+        agent = SPIAgent(config=test_config)
+
+        # Verify instructions mention Maven capabilities
+        assert "MAVEN DEPENDENCY MANAGEMENT" in agent.instructions
+        assert "Check single dependency version" in agent.instructions
+        assert "Scan Java projects for security vulnerabilities" in agent.instructions
+        assert "triage" in agent.instructions.lower()
+        assert "plan" in agent.instructions.lower()

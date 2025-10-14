@@ -1,6 +1,6 @@
 """Test tracker for Maven test execution."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from rich.table import Table
 

@@ -181,12 +181,12 @@ class WorkflowTools(GitHubToolsBase):
                 f"Actor: {run_data['actor']}\n"
             )
 
-            output.append(f"\nTiming:\n")
+            output.append("\nTiming:\n")
             output.append(f"  Created: {run_data['created_at']}\n")
             if run_data['run_started_at']:
                 output.append(f"  Started: {run_data['run_started_at']}\n")
             else:
-                output.append(f"  Started: Not started\n")
+                output.append("  Started: Not started\n")
             output.append(f"  Updated: {run_data['updated_at']}\n")
 
             # Get jobs
@@ -213,7 +213,7 @@ class WorkflowTools(GitHubToolsBase):
                         )
                         if job.conclusion:
                             output.append(f" ({job.conclusion})")
-                        output.append(f"\n")
+                        output.append("\n")
 
                     if total_jobs > 10:
                         output.append(f"  ... and {total_jobs - 10} more jobs\n")

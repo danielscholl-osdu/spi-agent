@@ -14,6 +14,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from . import SPIAgent
+from .config import AgentConfig
+from .mcp import MavenMCPManager
 
 console = Console()
 
@@ -179,6 +181,13 @@ def _render_help() -> None:
 - "Create an issue in partition: Fix authentication bug"
 - "Add comment to issue #2 in partition: This is resolved"
 
+**Maven Dependencies** (when enabled):
+- "Check if spring-core 5.3.0 has any updates available"
+- "Scan partition service for security vulnerabilities"
+- "Show all available versions of commons-lang3"
+- "Analyze the pom.xml in partition for issues"
+- "Run triage for partition and create issues for critical CVEs"
+
 **Slash Commands:**
 - `/fork partition` - Fork partition repository
 - `/fork partition,legal` - Fork multiple repositories
@@ -195,113 +204,133 @@ def _render_help() -> None:
 
 async def run_chat_mode(quiet: bool = False) -> int:
     """Run interactive chat mode."""
-    agent = SPIAgent()
+    config = AgentConfig()
 
-    if not quiet:
-        header = f"""[cyan]Organization:[/cyan] {agent.config.organization}
+    # Initialize Maven MCP if enabled
+    maven_mcp = MavenMCPManager(config)
+
+    async with maven_mcp:
+        # Create agent with Maven MCP tools if available
+        agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
+
+        if not quiet:
+            maven_status = "enabled" if maven_mcp.is_available else "disabled"
+            tool_count = len(agent.github_tools) + len(maven_mcp.tools)
+
+            header = f"""[cyan]Organization:[/cyan] {agent.config.organization}
 [cyan]Model:[/cyan]        {agent.config.azure_openai_deployment}
 [cyan]Repositories:[/cyan] {len(agent.config.repositories)} configured
+[cyan]Tools:[/cyan]        {tool_count} available (Maven MCP: {maven_status})
 [cyan]Memory:[/cyan]       Thread-based (within session)"""
 
-        console.print(Panel(header, title="🤖 SPI Agent - Interactive Mode", border_style="blue"))
-        console.print()
-        console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
-        console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-        console.print("[dim]Slash commands: /fork <services>, /status <services>, /test <services>[/dim]\n")
+            console.print(Panel(header, title="🤖 SPI Agent - Interactive Mode", border_style="blue"))
+            console.print()
+            console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
+            console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
+            console.print("[dim]Slash commands: /fork <services>, /status <services>, /test <services>[/dim]\n")
 
-    thread = agent.agent.get_new_thread()
+        thread = agent.agent.get_new_thread()
 
-    while True:
-        try:
-            query = console.input("[bold cyan]You:[/bold cyan] ").strip()
+        while True:
+            try:
+                query = console.input("[bold cyan]You:[/bold cyan] ").strip()
 
-            if not query:
-                continue
-
-            if query.lower() in ["exit", "quit", "q"]:
-                console.print("\n[yellow]Goodbye![/yellow]")
-                break
-
-            if query.lower() in ["help", "/help"]:
-                _render_help()
-                continue
-
-            if query.startswith("/"):
-                if not COPILOT_AVAILABLE:
-                    console.print("\n[red]Slash commands require the optional Copilot workflows.[/red]\n")
+                if not query:
                     continue
 
-                error = await handle_slash_command(query, agent, thread)
-                if error:
-                    console.print(f"\n[red]{error}[/red]\n")
-                continue
+                if query.lower() in ["exit", "quit", "q"]:
+                    console.print("\n[yellow]Goodbye![/yellow]")
+                    break
 
-            with console.status("[bold blue]Agent thinking...[/bold blue]", spinner="dots"):
-                result = await agent.agent.run(query, thread=thread)
+                if query.lower() in ["help", "/help"]:
+                    _render_help()
+                    continue
 
-            result_text = str(result) if not isinstance(result, str) else result
+                if query.startswith("/"):
+                    if not COPILOT_AVAILABLE:
+                        console.print("\n[red]Slash commands require the optional Copilot workflows.[/red]\n")
+                        continue
 
-            console.print()
-            console.print(
-                Panel(
-                    Markdown(result_text),
-                    title="[bold green]SPI Agent[/bold green]",
-                    border_style="green",
-                    padding=(1, 2),
+                    error = await handle_slash_command(query, agent, thread)
+                    if error:
+                        console.print(f"\n[red]{error}[/red]\n")
+                    continue
+
+                with console.status("[bold blue]Agent thinking...[/bold blue]", spinner="dots"):
+                    result = await agent.agent.run(query, thread=thread)
+
+                result_text = str(result) if not isinstance(result, str) else result
+
+                console.print()
+                console.print(
+                    Panel(
+                        Markdown(result_text),
+                        title="[bold green]SPI Agent[/bold green]",
+                        border_style="green",
+                        padding=(1, 2),
+                    )
                 )
-            )
-            console.print()
+                console.print()
 
-        except EOFError:
-            console.print("\n[yellow]Goodbye![/yellow]")
-            break
-        except KeyboardInterrupt:
-            console.print("\n\n[yellow]Interrupted. Goodbye![/yellow]")
-            break
-        except Exception as exc:  # pylint: disable=broad-except
-            console.print(f"\n[red]Error:[/red] {exc}\n", style="bold red")
+            except EOFError:
+                console.print("\n[yellow]Goodbye![/yellow]")
+                break
+            except KeyboardInterrupt:
+                console.print("\n\n[yellow]Interrupted. Goodbye![/yellow]")
+                break
+            except Exception as exc:  # pylint: disable=broad-except
+                console.print(f"\n[red]Error:[/red] {exc}\n", style="bold red")
 
     return 0
 
 
 async def run_single_query(prompt: str, quiet: bool = False) -> int:
     """Run a single query with Rich output."""
-    agent = SPIAgent()
+    config = AgentConfig()
 
-    if not quiet:
-        console.print(
-            Panel(
-                f"[cyan]Model:[/cyan] {agent.config.azure_openai_deployment}\n"
-                f"[cyan]Query:[/cyan] {prompt}",
-                title="🤖 SPI Agent",
-                border_style="blue",
-            )
-        )
-        console.print()
+    # Initialize Maven MCP if enabled
+    maven_mcp = MavenMCPManager(config)
 
-    try:
-        with console.status("[bold blue]Processing query...[/bold blue]", spinner="dots"):
-            result = await agent.run(prompt)
+    async with maven_mcp:
+        # Create agent with Maven MCP tools if available
+        agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
 
-        result_text = str(result) if not isinstance(result, str) else result
-
-        if quiet:
-            console.print(result_text)
-        else:
+        if not quiet:
+            maven_status = "enabled" if maven_mcp.is_available else "disabled"
             console.print(
                 Panel(
-                    Markdown(result_text),
-                    title="[bold green]Result[/bold green]",
-                    border_style="green",
-                    padding=(1, 2),
+                    f"[cyan]Model:[/cyan] {agent.config.azure_openai_deployment}\n"
+                    f"[cyan]Maven MCP:[/cyan] {maven_status}\n"
+                    f"[cyan]Query:[/cyan] {prompt}",
+                    title="🤖 SPI Agent",
+                    border_style="blue",
                 )
             )
+            console.print()
 
-        return 0
+        try:
+            with console.status("[bold blue]Processing query...[/bold blue]", spinner="dots"):
+                result = await agent.run(prompt)
 
-    except Exception as exc:  # pylint: disable=broad-except
-        console.print(f"[red]Error:[/red] {exc}", style="bold red")
-        return 1
+            result_text = str(result) if not isinstance(result, str) else result
+
+            if quiet:
+                console.print(result_text)
+            else:
+                console.print(
+                    Panel(
+                        Markdown(result_text),
+                        title="[bold green]Result[/bold green]",
+                        border_style="green",
+                        padding=(1, 2),
+                    )
+                )
+
+            return 0
+
+        except Exception as exc:  # pylint: disable=broad-except
+            console.print(f"[red]Error:[/red] {exc}", style="bold red")
+            return 1
 
 
 def build_parser() -> argparse.ArgumentParser:

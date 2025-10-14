@@ -2,7 +2,6 @@
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -55,6 +54,10 @@ class AgentConfig:
     azure_openai_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("AZURE_OPENAI_API_KEY")
     )
+
+    # Internal Maven MCP configuration (not user-configurable)
+    maven_mcp_command: str = "uvx"
+    maven_mcp_args: List[str] = field(default_factory=lambda: ["mvn-mcp-server"])
 
     def validate(self) -> None:
         """Validate configuration and raise ValueError if invalid."""

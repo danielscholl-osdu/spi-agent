@@ -7,13 +7,14 @@ AI-powered GitHub management for OSDU SPI services. Chat with your repositories 
 
 ## Overview
 
-SPI Agent provides a conversational interface for managing GitHub **Issues**, **Pull Requests**, **Workflows**, and **Code Scanning** across OSDU SPI service repositories. Perform comprehensive GitHub operations without leaving your terminal.
+SPI Agent provides a conversational interface for managing GitHub **Issues**, **Pull Requests**, **Workflows**, and **Code Scanning** across OSDU SPI service repositories. With Maven MCP integration, gain powerful **dependency management** and **security scanning** capabilities. Perform comprehensive GitHub and Maven operations without leaving your terminal.
 
-**21 GitHub Tools Available:**
+**21+ Tools Available:**
 - 🐛 **Issues**: List, read, create, update, comment, search
 - 🔀 **Pull Requests**: List, read, create, update, merge, comment
 - ⚙️ **Workflows**: List, monitor runs, trigger, cancel
 - 🔒 **Code Scanning**: List security alerts, get vulnerability details
+- 📦 **Maven Dependencies** (optional): Version checks, vulnerability scanning, triage analysis
 
 ```bash
 You: List all open issues in partition
@@ -59,6 +60,9 @@ Agent: -- Maven test results --
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) package manager
 - [GitHub CLI](https://github.com/cli/cli#installation) + `gh auth login`
+
+**Optional (for Maven dependency management)**
+- [trivy](https://trivy.dev) for security vulnerability scanning
 
 
 
@@ -195,6 +199,50 @@ schema          coverage   TEST SUCCESS      38 passed        82%/70%
 |----------|---------|-------------|
 | `SPI_AGENT_ORGANIZATION` | `danielscholl-osdu` | GitHub organization |
 | `SPI_AGENT_REPOSITORIES` | `partition,legal,entitlements,schema,file,storage` | Comma-separated repo list |
+
+### Maven MCP Integration
+
+Maven dependency management and security scanning is automatically available via the [Maven MCP Server](https://github.com/danielscholl/mvn-mcp-server). This provides:
+
+**Capabilities:**
+- Check dependency versions and discover updates (major/minor/patch)
+- Scan Java projects for security vulnerabilities using Trivy
+- Analyze POM files for dependency issues
+- Run comprehensive triage analysis with CVE detection
+- Generate actionable remediation plans
+
+**Setup:**
+```bash
+# Install Trivy for security scanning (optional but recommended)
+brew install trivy  # macOS
+# See https://trivy.dev for other platforms
+
+# The Maven MCP server will be auto-installed via uvx on first use
+```
+
+**Example Workflows:**
+```bash
+# Check dependency versions
+You: "Check if spring-core 5.3.0 has any updates available"
+Agent: spring-core 5.3.0 → 6.1.0 available (major update)
+
+# Security scanning
+You: "Scan partition service for vulnerabilities"
+Agent: Found 2 critical CVEs in partition/pom.xml:
+       🔴 CVE-2023-XXXXX (CVSS 9.8) in spring-core 5.3.0
+
+# Integrated workflow: scan → create issues
+You: "Run triage for partition and create issues for critical CVEs"
+Agent: 1. Scanning partition/pom.xml...
+       2. Found 2 critical, 5 high severity issues
+       3. Created issue #15: [SECURITY] CVE-2023-XXXXX in spring-core
+       4. Created issue #16: [SECURITY] CVE-2023-YYYYY in commons-io
+```
+
+**Requirements:**
+- Maven MCP Server is installed automatically via `uvx mvn-mcp-server`
+- Trivy is optional but required for security vulnerability scanning
+- Without Trivy, version checking and dependency analysis still work
 
 ## Testing
 
