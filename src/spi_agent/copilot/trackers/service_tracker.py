@@ -1,41 +1,46 @@
 """Service status tracker for copilot CLI wrapper."""
 
-from typing import List
+from typing import Any, Dict, List
 
 from rich.table import Table
 
+from spi_agent.copilot.base import BaseTracker
+from spi_agent.copilot.constants import STATUS_ICONS
 
-class ServiceTracker:
+
+class ServiceTracker(BaseTracker):
     """Tracks the status of services being processed"""
 
-    def __init__(self, services: List[str]):
-        self.services = {
+    @property
+    def table_title(self) -> str:
+        """Return the title for the status table."""
+        return "Service Status"
+
+    @property
+    def status_icons(self) -> Dict[str, str]:
+        """Return status icon mapping."""
+        return STATUS_ICONS
+
+    def _initialize_services(self, services: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Initialize service tracking dictionary."""
+        return {
             service: {
                 "status": "pending",
                 "details": "Waiting to start",
-                "icon": "⏸",
+                "icon": self.get_icon("pending"),
             }
             for service in services
         }
 
-    def update(self, service: str, status: str, details: str = ""):
-        """Update service status"""
-        if service in self.services:
-            icons = {
-                "pending": "⏸",
-                "running": "▶",
-                "waiting": "▶",
-                "success": "✓",
-                "error": "✗",
-                "skipped": "⊘",
-            }
-            self.services[service]["status"] = status
-            self.services[service]["details"] = details
-            self.services[service]["icon"] = icons.get(status, "•")
+    def _update_service(self, service: str, status: str, details: str, **kwargs) -> None:
+        """Internal method to update service status."""
+        self.services[service]["status"] = status
+        self.services[service]["details"] = details
+        self.services[service]["icon"] = self.get_icon(status)
 
     def get_table(self) -> Table:
         """Generate Rich table of service status"""
-        table = Table(title="Service Status", expand=True)
+        table = Table(title=self.table_title, expand=True)
         table.add_column("Service", style="cyan", no_wrap=True)
         table.add_column("Status", style="magenta")
         table.add_column("Details", style="white")

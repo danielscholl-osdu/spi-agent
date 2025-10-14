@@ -2,30 +2,22 @@
 
 import re
 import subprocess
-from collections import deque
 from datetime import datetime
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Union
 
-from rich.console import Console
-from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 
-from spi_agent.copilot.config import config, log_dir
+from spi_agent.copilot.base import BaseRunner
+from spi_agent.copilot.base.runner import console, current_process
+from spi_agent.copilot.config import config
 from spi_agent.copilot.trackers import TestTracker
 
-console = Console()
 
-# Global process reference for signal handling (will be set by parent module)
-current_process: Optional[subprocess.Popen] = None
-
-
-class TestRunner:
-    """Runs Copilot CLI to execute Maven tests with live output"""
+class TestRunner(BaseRunner):
+    """Runs Copilot CLI to execute Maven tests with live output and coverage analysis"""
 
     def __init__(
         self,
@@ -33,19 +25,14 @@ class TestRunner:
         services: List[str],
         provider: str = "azure",
     ):
-        self.prompt_file = prompt_file
-        self.services = services
+        super().__init__(prompt_file, services)
         self.provider = provider
-        self.output_lines = deque(maxlen=50)
-        self.full_output = []
         self.tracker = TestTracker(services, provider)
 
-        # Generate log file path
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        services_str = "-".join(services[:3])
-        if len(services) > 3:
-            services_str += f"-and-{len(services)-3}-more"
-        self.log_file = log_dir / f"test_{timestamp}_{services_str}.log"
+    @property
+    def log_prefix(self) -> str:
+        """Return log file prefix for this runner type."""
+        return "test"
 
     def load_prompt(self) -> str:
         """Load and augment prompt with arguments"""
@@ -68,31 +55,7 @@ class TestRunner:
         console.print(Panel(config_text, title="🧪 Maven Test Execution", border_style="blue"))
         console.print()
 
-    def get_output_panel(self) -> Panel:
-        """Create panel with scrolling output"""
-        if not self.output_lines:
-            output_text = Text("Waiting for output...", style="dim")
-        else:
-            output_text = Text()
-            for line in self.output_lines:
-                if line.startswith("$"):
-                    output_text.append(line + "\n", style="cyan")
-                elif line.startswith("✓") or "success" in line.lower():
-                    output_text.append(line + "\n", style="green")
-                elif line.startswith("✗") or "error" in line.lower() or "failed" in line.lower():
-                    output_text.append(line + "\n", style="red")
-                elif "[INFO]" in line:
-                    output_text.append(line + "\n", style="blue")
-                elif "[ERROR]" in line:
-                    output_text.append(line + "\n", style="red")
-                elif "[WARNING]" in line:
-                    output_text.append(line + "\n", style="yellow")
-                else:
-                    output_text.append(line + "\n", style="white")
-
-        return Panel(output_text, title="📋 Agent Output", border_style="blue")
-
-    def parse_maven_output(self, line: str):
+    def parse_output(self, line: str) -> None:
         """Parse copilot's task announcements for test status updates"""
         line_lower = line.lower()
         line_stripped = line.strip()
@@ -146,18 +109,6 @@ class TestRunner:
         elif "compilation failure" in line_lower and target_service:
             self.tracker.update(target_service, "compile_failed", "Failed", phase="compile")
 
-    def create_layout(self) -> Layout:
-        """Create split layout with status and output"""
-        layout = Layout()
-
-        # Simple split: status (left) and output (right)
-        layout.split_row(
-            Layout(name="status", ratio=1),
-            Layout(name="output", ratio=2)
-        )
-
-        return layout
-
     def run(self) -> int:
         """Execute copilot to run Maven tests with live output"""
         global current_process
@@ -195,7 +146,7 @@ class TestRunner:
 
                             # Parse output and check if status changed
                             old_status = dict(self.tracker.services)
-                            self.parse_maven_output(line)
+                            self.parse_output(line)
 
                             # Only update display if status changed or every 10 lines
                             status_changed = old_status != self.tracker.services
@@ -240,8 +191,8 @@ class TestRunner:
                     label = self.tracker.services[service].get("quality_label", "")
                     self.tracker.services[service]["details"] = f"Grade {grade}: {label}"
 
-            # Print the final summary panel
-            console.print(self.get_summary_panel(process.returncode))
+            # Print the final results panel
+            console.print(self.get_results_panel(process.returncode))
 
             self._save_log(process.returncode)
 
@@ -566,8 +517,8 @@ class TestRunner:
         except Exception as e:
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 
-    def get_summary_panel(self, return_code: int) -> Panel:
-        """Generate final summary panel - uses the same clean table format as quality panel"""
+    def get_results_panel(self, return_code: int) -> Panel:
+        """Generate final results panel - uses the same clean table format as quality panel"""
         # Simply return the quality panel which already has the clean columnar layout
         return self.get_quality_panel()
 

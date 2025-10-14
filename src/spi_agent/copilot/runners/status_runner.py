@@ -4,47 +4,36 @@ import json
 import re
 import subprocess
 import textwrap
-from collections import deque
 from datetime import datetime
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from pydantic import ValidationError
-from rich.console import Console
-from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
-from spi_agent.copilot.config import config, log_dir
+from spi_agent.copilot.base import BaseRunner
+from spi_agent.copilot.base.runner import console, current_process
+from spi_agent.copilot.config import config
 from spi_agent.copilot.constants import SERVICES
 from spi_agent.copilot.models import StatusResponse
 from spi_agent.copilot.trackers import StatusTracker
 
-console = Console()
 
-# Global process reference for signal handling (will be set by parent module)
-current_process: Optional[subprocess.Popen] = None
-
-
-class StatusRunner:
+class StatusRunner(BaseRunner):
     """Runs Copilot CLI to gather GitHub status and displays results"""
 
     def __init__(self, prompt_file: Union[Path, Traversable], services: List[str]):
-        self.prompt_file = prompt_file
-        self.services = services
-        self.output_lines = deque(maxlen=50)  # Keep last 50 lines of output
+        super().__init__(prompt_file, services)
         self.raw_output = []  # Keep full output for JSON extraction
         self.tracker = StatusTracker(services)
 
-        # Generate log file path
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        services_str = "-".join(services[:3])
-        if len(services) > 3:
-            services_str += f"-and-{len(services)-3}-more"
-        self.log_file = log_dir / f"status_{timestamp}_{services_str}.log"
+    @property
+    def log_prefix(self) -> str:
+        """Return log file prefix for this runner type."""
+        return "status"
 
     def load_prompt(self) -> str:
         """Load and augment prompt with arguments"""
@@ -58,29 +47,7 @@ class StatusRunner:
         augmented = f"{prompt}\n\nARGUMENTS:\nSERVICES: {services_arg}"
         return augmented
 
-    def get_output_panel(self) -> Panel:
-        """Create panel with scrolling output"""
-        if not self.output_lines:
-            output_text = Text("Waiting for output...", style="dim")
-        else:
-            # Join lines and create text
-            output_text = Text()
-            for line in self.output_lines:
-                # Add some color coding for common patterns
-                if line.startswith("$"):
-                    output_text.append(line + "\n", style="cyan")
-                elif line.startswith("✓") or "success" in line.lower():
-                    output_text.append(line + "\n", style="green")
-                elif line.startswith("✗") or "error" in line.lower() or "failed" in line.lower():
-                    output_text.append(line + "\n", style="red")
-                elif line.startswith("●"):
-                    output_text.append(line + "\n", style="yellow")
-                else:
-                    output_text.append(line + "\n", style="white")
-
-        return Panel(output_text, title="📋 Agent Output", border_style="blue")
-
-    def parse_status_line(self, line: str):
+    def parse_output(self, line: str) -> None:
         """Parse copilot output to track which services are being queried"""
         line_lower = line.lower()
         line_stripped = line.strip()
@@ -126,15 +93,6 @@ class StatusRunner:
                 elif "error" in line_lower or "failed" in line_lower:
                     if "check" not in line_lower:  # Ignore "checking for errors"
                         self.tracker.update(service, "error", "Failed to gather data")
-
-    def create_layout(self) -> Layout:
-        """Create split layout with status and output"""
-        layout = Layout()
-        layout.split_row(
-            Layout(name="status", ratio=1),
-            Layout(name="output", ratio=2)
-        )
-        return layout
 
     def extract_json(self, output: str) -> Optional[Dict]:
         """Extract JSON from copilot output (may be wrapped in markdown)"""
@@ -302,7 +260,7 @@ class StatusRunner:
                 failed = sum(1 for w in workflows if w.get("status") == "completed" and w.get("conclusion") in ["failure", "cancelled"])
 
                 if running > 0:
-                    workflow_display = f"[yellow]⏳ {running} running[/yellow]"
+                    workflow_display = f"[yellow]▶ {running} running[/yellow]"
                 elif failed > 0:
                     workflow_display = f"[red]✗ {failed} failed[/red]"
                 elif completed > 0:
@@ -400,7 +358,7 @@ class StatusRunner:
                             else:
                                 status_display = f"[dim]{conclusion or 'completed'}[/dim]"
                         elif status in ["in_progress", "queued", "waiting"]:
-                            status_display = f"[yellow]⏳ {status}[/yellow]"
+                            status_display = f"[yellow]▶ {status}[/yellow]"
                         else:
                             status_display = f"[dim]{status}[/dim]"
 
@@ -497,7 +455,7 @@ class StatusRunner:
             for service_data in services_data.values()
         )
         if total_running > 0:
-            next_steps.append(f"[yellow]⏳[/yellow] {total_running} workflow(s) still running")
+            next_steps.append(f"[yellow]▶[/yellow] {total_running} workflow(s) still running")
         else:
             next_steps.append(f"[green]✓[/green] All workflows completed")
 
@@ -563,7 +521,7 @@ class StatusRunner:
                             self.raw_output.append(line)
 
                             # Parse for status updates
-                            self.parse_status_line(line)
+                            self.parse_output(line)
 
                             # Update both panels
                             layout["status"].update(self.tracker.get_table())
@@ -670,5 +628,17 @@ class StatusRunner:
             console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
         except Exception as e:
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
+
+    def get_results_panel(self, return_code: int) -> Panel:
+        """Generate final results panel.
+
+        Note: StatusRunner uses display_status() for output instead of a single panel.
+        This method is required by BaseRunner but not used in StatusRunner's run() method.
+        """
+        return Panel(
+            "Status data displayed above",
+            title="✓ Status Check Complete" if return_code == 0 else "✗ Status Check Failed",
+            border_style="green" if return_code == 0 else "red"
+        )
 
 

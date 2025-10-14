@@ -1,29 +1,19 @@
 """Copilot fork runner for repository initialization."""
 
-import subprocess
-from collections import deque
-from datetime import datetime
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Union
 
-from rich.console import Console
-from rich.layout import Layout
-from rich.live import Live
 from rich.panel import Panel
-from rich.text import Text
 
-from spi_agent.copilot.config import config, log_dir
+from spi_agent.copilot.base import BaseRunner
+from spi_agent.copilot.base.runner import console, current_process
+from spi_agent.copilot.config import config
 from spi_agent.copilot.trackers import ServiceTracker
 
-console = Console()
 
-# Global process reference for signal handling (will be set by parent module)
-current_process: Optional[subprocess.Popen] = None
-
-
-class CopilotRunner:
-    """Runs Copilot CLI with enhanced output"""
+class CopilotRunner(BaseRunner):
+    """Runs Copilot CLI with enhanced output for fork operations"""
 
     def __init__(
         self,
@@ -31,19 +21,14 @@ class CopilotRunner:
         services: List[str],
         branch: str = "main",
     ):
-        self.prompt_file = prompt_file
-        self.services = services
+        super().__init__(prompt_file, services)
         self.branch = branch
         self.tracker = ServiceTracker(services)
-        self.output_lines = deque(maxlen=50)  # Keep last 50 lines of output
-        self.full_output = []  # Keep all output for logging
 
-        # Generate log file path
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        services_str = "-".join(services[:3])  # Max 3 service names in filename
-        if len(services) > 3:
-            services_str += f"-and-{len(services)-3}-more"
-        self.log_file = log_dir / f"fork_{timestamp}_{services_str}.log"
+    @property
+    def log_prefix(self) -> str:
+        """Return log file prefix for this runner type."""
+        return "fork"
 
     def load_prompt(self) -> str:
         """Load and augment prompt with arguments"""
@@ -67,38 +52,7 @@ class CopilotRunner:
         console.print(Panel(config_text, title="🤖 Copilot Automation", border_style="blue"))
         console.print()
 
-    def get_output_panel(self) -> Panel:
-        """Create panel with scrolling output"""
-        if not self.output_lines:
-            output_text = Text("Waiting for output...", style="dim")
-        else:
-            # Join lines and create text
-            output_text = Text()
-            for line in self.output_lines:
-                # Add some color coding for common patterns
-                if line.startswith("$"):
-                    output_text.append(line + "\n", style="cyan")
-                elif line.startswith("✓") or "success" in line.lower():
-                    output_text.append(line + "\n", style="green")
-                elif line.startswith("✗") or "error" in line.lower() or "failed" in line.lower():
-                    output_text.append(line + "\n", style="red")
-                elif line.startswith("●"):
-                    output_text.append(line + "\n", style="yellow")
-                else:
-                    output_text.append(line + "\n", style="white")
-
-        return Panel(output_text, title="📋 Agent Output", border_style="blue")
-
-    def create_layout(self) -> Layout:
-        """Create split layout with status and output"""
-        layout = Layout()
-        layout.split_row(
-            Layout(name="status", ratio=1),
-            Layout(name="output", ratio=2)
-        )
-        return layout
-
-    def parse_output_line(self, line: str):
+    def parse_output(self, line: str) -> None:
         """Parse copilot output for status updates"""
         line_lower = line.lower()
         line_stripped = line.strip()
@@ -244,107 +198,8 @@ class CopilotRunner:
                 elif "permission denied" in line_lower or "could not request permission" in line_lower:
                     self.tracker.update(service, "error", "Permission denied")
 
-    def run(self) -> int:
-        """Execute copilot with streaming output"""
-        global current_process
-
-        self.show_config()
-
-        prompt_content = self.load_prompt()
-        command = ["copilot", "-p", prompt_content, "--allow-all-tools"]
-
-        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
-
-        try:
-            # Start process with streaming output
-            # Redirect stderr to stdout to avoid blocking issues
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
-            )
-
-            # Set global process for signal handler
-            current_process = process
-
-            # Create split layout
-            layout = self.create_layout()
-
-            # Initialize panels with content before entering Live context
-            layout["status"].update(self.tracker.get_table())
-            layout["output"].update(self.get_output_panel())
-
-            # Live display with split view: status table (left) and output (right)
-            with Live(layout, console=console, refresh_per_second=4) as live:
-                # Read stdout line by line
-                if process.stdout:
-                    for line in process.stdout:
-                        line = line.rstrip()
-                        if line:
-                            # Add to both buffers
-                            self.output_lines.append(line)
-                            self.full_output.append(line)
-
-                            # Parse for status updates
-                            self.parse_output_line(line)
-
-                            # Update both panels
-                            layout["status"].update(self.tracker.get_table())
-                            layout["output"].update(self.get_output_panel())
-
-                # Wait for process to complete
-                process.wait()
-
-                # Keep final status table visible in layout
-                # No need to update - last parse updates are already showing
-
-            # ALL post-processing happens OUTSIDE Live context to prevent panel jumping
-            console.print()  # Add spacing
-
-            # Print the final summary panel as a separate panel below
-            console.print(self.get_summary_panel(process.returncode))
-
-            # Save full output to log file
-            self._save_log(process.returncode)
-
-            return process.returncode
-
-        except FileNotFoundError:
-            console.print(
-                "[red]Error:[/red] 'copilot' command not found. Is GitHub Copilot CLI installed?",
-                style="bold red",
-            )
-            return 1
-        except Exception as e:
-            console.print(f"[red]Error executing command:[/red] {e}", style="bold red")
-            return 1
-        finally:
-            # Clear global process reference
-            current_process = None
-
-    def _save_log(self, return_code: int):
-        """Save execution log to file"""
-        try:
-            with open(self.log_file, "w") as f:
-                f.write(f"{'='*70}\n")
-                f.write(f"Copilot Fork Execution Log\n")
-                f.write(f"{'='*70}\n")
-                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                f.write(f"Services: {', '.join(self.services)}\n")
-                f.write(f"Branch: {self.branch}\n")
-                f.write(f"Exit Code: {return_code}\n")
-                f.write(f"{'='*70}\n\n")
-                f.write("\n".join(self.full_output))
-
-            console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
-        except Exception as e:
-            console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
-
-    def get_summary_panel(self, return_code: int) -> Panel:
-        """Generate final summary panel with clean table layout"""
+    def get_results_panel(self, return_code: int) -> Panel:
+        """Generate final results panel with clean table layout"""
         from rich.table import Table
 
         # Create table for results
