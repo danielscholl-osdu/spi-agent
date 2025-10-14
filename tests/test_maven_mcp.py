@@ -1,7 +1,9 @@
 """Tests for Maven MCP integration."""
 
-import pytest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from spi_agent.config import AgentConfig
 from spi_agent.mcp import MavenMCPManager
@@ -140,6 +142,63 @@ class TestMavenMCPManager:
         """Test tools property when no tool initialized."""
         manager = MavenMCPManager(config)
         assert manager.tools == []
+
+    def test_resolve_workspace_path_service(self, config, tmp_path):
+        """Service names should resolve under configured repos root."""
+        manager = MavenMCPManager(config)
+        repos_root = tmp_path / "repos"
+        repos_root.mkdir()
+        target = repos_root / "partition"
+        target.mkdir()
+
+        manager._workspace_root = repos_root
+
+        resolved = manager._resolve_workspace_path("partition")
+
+        assert Path(resolved) == target.resolve()
+
+    def test_resolve_workspace_path_existing_relative(self, config, tmp_path):
+        """Relative paths under repos should be normalized to absolute paths."""
+        manager = MavenMCPManager(config)
+        repos_root = tmp_path / "repos"
+        repos_root.mkdir()
+        target = repos_root / "legal"
+        target.mkdir()
+
+        manager._workspace_root = repos_root
+
+        resolved = manager._resolve_workspace_path("./repos/legal")
+
+        assert Path(resolved) == target.resolve()
+
+    @pytest.mark.asyncio
+    async def test_call_tool_normalizes_workspace(self, config, tmp_path):
+        """call_tool wrapper should rewrite workspace argument before delegation."""
+        manager = MavenMCPManager(config)
+        repos_root = tmp_path / "repos"
+        repos_root.mkdir()
+        (repos_root / "storage").mkdir()
+
+        manager._workspace_root = repos_root
+
+        mock_tool_instance = AsyncMock()
+
+        async def original_call(name, arguments=None, **kwargs):
+            return name, arguments, kwargs
+
+        async_mock = AsyncMock(side_effect=original_call)
+        mock_tool_instance.call_tool = async_mock
+        manager.mcp_tool = mock_tool_instance
+        manager._wrap_workspace_normalization()
+
+        await manager.mcp_tool.call_tool("scan_java_project", {"workspace": "storage"})
+
+        expected_path = (repos_root / "storage").resolve()
+
+        async_mock.assert_awaited_once()
+        await_args = async_mock.await_args
+        assert await_args.args[0] == "scan_java_project"
+        assert await_args.args[1]["workspace"] == str(expected_path)
 
     @pytest.mark.asyncio
     @patch("spi_agent.mcp.maven_mcp.shutil.which")

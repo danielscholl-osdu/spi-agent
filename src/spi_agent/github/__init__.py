@@ -161,8 +161,8 @@ def create_github_tools(config: AgentConfig) -> List:
     """
     Create GitHub tool functions for the agent.
 
-    This function creates a GitHubTools instance and returns a list of all
-    21 GitHub tool methods that can be passed to the agent framework.
+    This function creates specialized tool class instances and returns their
+    bound methods, which preserve type annotations for proper agent framework integration.
 
     Args:
         config: Agent configuration containing GitHub token and org info
@@ -174,35 +174,41 @@ def create_github_tools(config: AgentConfig) -> List:
         - Workflows/Actions (5 tools): list, list_runs, get_run, trigger, cancel_run
         - Code Scanning (2 tools): list_alerts, get_alert
     """
-    tools_instance = GitHubTools(config)
+    # Create specialized tool instances
+    # Using separate instances (not via GitHubTools wrapper) preserves method signatures
+    issues = IssueTools(config)
+    pull_requests = PullRequestTools(config)
+    workflows = WorkflowTools(config)
+    code_scanning = CodeScanningTools(config)
 
-    # Return list of bound methods that work as agent tools
+    # Return bound methods directly from specialized tool classes
+    # This preserves type annotations that were lost when accessing via GitHubTools wrapper
     return [
         # Issues (7 tools)
-        tools_instance.list_issues,
-        tools_instance.get_issue,
-        tools_instance.get_issue_comments,
-        tools_instance.create_issue,
-        tools_instance.update_issue,
-        tools_instance.add_issue_comment,
-        tools_instance.search_issues,
+        issues.list_issues,
+        issues.get_issue,
+        issues.get_issue_comments,
+        issues.create_issue,
+        issues.update_issue,
+        issues.add_issue_comment,
+        issues.search_issues,
         # Pull Requests (7 tools)
-        tools_instance.list_pull_requests,
-        tools_instance.get_pull_request,
-        tools_instance.get_pr_comments,
-        tools_instance.create_pull_request,
-        tools_instance.update_pull_request,
-        tools_instance.merge_pull_request,
-        tools_instance.add_pr_comment,
+        pull_requests.list_pull_requests,
+        pull_requests.get_pull_request,
+        pull_requests.get_pr_comments,
+        pull_requests.create_pull_request,
+        pull_requests.update_pull_request,
+        pull_requests.merge_pull_request,
+        pull_requests.add_pr_comment,
         # Workflows/Actions (5 tools)
-        tools_instance.list_workflows,
-        tools_instance.list_workflow_runs,
-        tools_instance.get_workflow_run,
-        tools_instance.trigger_workflow,
-        tools_instance.cancel_workflow_run,
+        workflows.list_workflows,
+        workflows.list_workflow_runs,
+        workflows.get_workflow_run,
+        workflows.trigger_workflow,
+        workflows.cancel_workflow_run,
         # Code Scanning (2 tools)
-        tools_instance.list_code_scanning_alerts,
-        tools_instance.get_code_scanning_alert,
+        code_scanning.list_code_scanning_alerts,
+        code_scanning.get_code_scanning_alert,
     ]
 
 

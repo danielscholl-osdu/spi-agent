@@ -76,4 +76,4 @@ def test_config_maven_mcp_defaults():
     with patch.dict(os.environ, {}, clear=True):
         config = AgentConfig()
         assert config.maven_mcp_command == "uvx"
-        assert config.maven_mcp_args == ["mvn-mcp-server"]
+        assert config.maven_mcp_args == ["--quiet", "mvn-mcp-server"]

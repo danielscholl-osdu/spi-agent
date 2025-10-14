@@ -220,6 +220,10 @@ brew install trivy  # macOS
 # The Maven MCP server will be auto-installed via uvx on first use
 ```
 
+**Workspace Layout:**
+- Local repositories live under `./repos/<service>` (for example `./repos/partition`).
+- Always pass these concrete paths (absolute or `./repos/<service>`) when invoking Maven MCP tools so the server can locate the workspace.
+
 **Example Workflows:**
 ```bash
 # Check dependency versions

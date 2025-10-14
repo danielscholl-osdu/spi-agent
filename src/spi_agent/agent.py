@@ -128,6 +128,10 @@ BEST PRACTICES:
 - For code scanning alerts, include severity and rule information when creating issues
 - When creating issues for Maven vulnerabilities, include CVE IDs, CVSS scores, and affected versions
 - Prioritize critical and high severity vulnerabilities in remediation plans
+
+WORKSPACE LAYOUT:
+- Local clones are stored under ./repos/{{service}} (e.g., ./repos/partition, ./repos/legal)
+- When using Maven MCP tools, always provide absolute or ./repos-prefixed workspace paths that point to these directories
 """
 
         # Initialize Azure OpenAI client
