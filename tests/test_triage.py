@@ -347,3 +347,33 @@ class TestTriageRunner:
 
         assert "Error analyzing partition" in response
         assert runner.tracker.services["partition"]["status"] == "error"
+
+    def test_extract_cve_details_with_package_header(self, mock_prompt_file, mock_agent):
+        """Ensure CVE details parser handles package names after em dash."""
+        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+
+        response = """
+1) CVE-2022-22965 — org.springframework:spring-beans (installed: 5.2.7.RELEASE)
+   - Severity: Critical
+   - Affected package: org.springframework:spring-beans
+   - Installed version (example location): 5.2.7.RELEASE (partition/pom.xml)
+   - Scanner recommendation: upgrade to 5.2.20.RELEASE or 5.3.18
+   - Reference: https://nvd.nist.gov/vuln/detail/CVE-2022-22965
+
+2) CVE-2025-55163 — io.netty:netty-codec-http2 (installed: 4.1.99.Final)
+   - Severity: High
+   - Affected artifact: io.netty:netty-codec-http2
+   - Installed versions found: 4.1.99.Final, 4.1.90.Final
+   - Fix / recommended version: 4.1.124.Final
+   - Reference: https://nvd.nist.gov/vuln/detail/CVE-2025-55163
+"""
+
+        cves = runner._extract_cve_details(response)
+
+        assert len(cves) == 2
+        assert cves[0]["cve_id"] == "CVE-2022-22965"
+        assert cves[0]["severity"] == "Critical"
+        assert cves[0]["package"] == "org.springframework:spring-beans"
+        assert cves[1]["cve_id"] == "CVE-2025-55163"
+        assert cves[1]["severity"] == "High"
+        assert cves[1]["package"] == "io.netty:netty-codec-http2"

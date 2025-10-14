@@ -339,19 +339,37 @@ class TriageRunner(BaseRunner):
         while i < len(lines):
             line = lines[i].strip()
 
-            # Try Format 2 first (CVE with em dash and severity)
-            cve_match_format2 = re.match(r'^\d+\)\s+(CVE-\d{4}-\d+)\s+—\s+(\w+)', line, re.IGNORECASE)
+            # Try flexible CVE header patterns
+            # Format 1: CVE-2025-24813 (critical)  <- Severity in parentheses
+            # Format 2: CVE-2025-24813 — critical  <- Severity after em-dash
+            # Format 3: CVE-2025-24813             <- CVE alone
 
-            # Then try Format 1 (CVE alone)
-            cve_match_format1 = re.match(r'^\d+\)\s+(CVE-\d{4}-\d+)(?:\s+\([^)]+\))?\s*$', line, re.IGNORECASE)
+            cve_match = re.match(r'^\d+\)\s+(CVE-\d{4}-\d+)(?:\s+[—-]\s+|\s+\()?([^)\n]+)?', line, re.IGNORECASE)
 
-            if cve_match_format2 or cve_match_format1:
-                if cve_match_format2:
-                    cve_id = cve_match_format2.group(1)
-                    severity = cve_match_format2.group(2).strip().title()
-                else:
-                    cve_id = cve_match_format1.group(1)
-                    severity = None  # Will be parsed from fields below
+            if cve_match:
+                cve_id = cve_match.group(1)
+                post_cve = cve_match.group(2)  # Could be severity or package or None
+                severity = None
+                initial_package = None
+
+                # Parse what follows the CVE ID
+                if post_cve:
+                    post_cve = post_cve.strip().rstrip(')')  # Remove trailing paren if present
+
+                    # Check if it's a severity keyword
+                    severity_keywords = {"critical", "high", "medium", "low"}
+                    tokens = post_cve.split()
+                    first_token_lower = tokens[0].lower().rstrip(':') if tokens else ""
+
+                    if first_token_lower in severity_keywords:
+                        severity = tokens[0].rstrip(':').title()
+                        # Rest might be package name
+                        remaining = ' '.join(tokens[1:]).strip()
+                        if remaining:
+                            initial_package = remaining
+                    else:
+                        # Not a severity, might be package name
+                        initial_package = post_cve
 
                 cve_data = {
                     "cve_id": cve_id,
@@ -362,66 +380,68 @@ class TriageRunner(BaseRunner):
                     "nvd_link": None,
                 }
 
+                # Set initial package if found in header
+                if initial_package:
+                    package_name = initial_package
+                    # Remove trailing context commonly appended in reports
+                    package_name = re.split(r'\(installed| - Severity', package_name, maxsplit=1)[0].strip()
+                    if package_name:
+                        cve_data["package"] = package_name
+
                 # Parse the following lines for metadata
                 j = i + 1
                 while j < len(lines) and lines[j].strip().startswith('-'):
                     metadata_line = lines[j].strip()[1:].strip()  # Remove leading "-"
+                    metadata_line_lower = metadata_line.lower()
 
-                    # Check for different field names the agent uses
-                    # Severity
-                    if metadata_line.lower().startswith('severity:'):
-                        if not cve_data["severity"]:  # Only set if not already set from Format 2
-                            cve_data["severity"] = metadata_line.split(':', 1)[1].strip().title()
+                    # Skip empty lines
+                    if not metadata_line or ':' not in metadata_line:
+                        j += 1
+                        continue
 
-                    # Package/Artifact (multiple variations)
-                    elif metadata_line.lower().startswith('affected package:'):
-                        cve_data["package"] = metadata_line.split(':', 1)[1].strip()
-                    elif metadata_line.lower().startswith('affected artifact:'):
-                        cve_data["package"] = metadata_line.split(':', 1)[1].strip()
-                    elif metadata_line.lower().startswith('affected artifact(s):'):
-                        cve_data["package"] = metadata_line.split(':', 1)[1].strip()
-                    elif metadata_line.lower().startswith('package:') and not cve_data["package"]:
-                        cve_data["package"] = metadata_line.split(':', 1)[1].strip()
+                    # Split field and value
+                    field_part, value_part = metadata_line.split(':', 1)
+                    field_lower = field_part.lower().strip()
+                    value = value_part.strip()
 
-                    # Version (multiple variations)
-                    elif metadata_line.lower().startswith('installed version (example location):'):
-                        # Extract just the version, ignore the path in parentheses
-                        version_part = metadata_line.split(':', 1)[1].strip()
-                        if '(' in version_part:
-                            cve_data["version"] = version_part.split('(')[0].strip()
+                    # Use flexible keyword matching with substring search (not word boundaries)
+                    # This handles variations like "recommendation" matching "recommend"
+
+                    # Severity - look for "severity" keyword
+                    if 'severity' in field_lower:
+                        severity_word = value.split()[0] if value else ""
+                        if severity_word:
+                            cve_data["severity"] = severity_word.title()
+
+                    # Package/Artifact - look for "affected", "package", or "artifact" keywords
+                    elif ('affected' in field_lower or 'package' in field_lower or 'artifact' in field_lower) and not cve_data["package"]:
+                        # Remove extra context like version info
+                        package_name = re.split(r'\s*—\s+installed|\s+—\s+installed|\(installed', value, maxsplit=1)[0].strip()
+                        if package_name:
+                            cve_data["package"] = package_name
+
+                    # Version - look for "installed" and "version" keywords together
+                    elif ('installed' in field_lower and 'version' in field_lower) and not cve_data["version"]:
+                        # Extract just the version, ignore paths/locations in parentheses
+                        if '(' in value:
+                            cve_data["version"] = value.split('(')[0].strip()
                         else:
-                            cve_data["version"] = version_part
-                    elif metadata_line.lower().startswith('installed version found:'):
-                        cve_data["version"] = metadata_line.split(':', 1)[1].strip()
-                    elif metadata_line.lower().startswith('installed versions found:'):
-                        # Handle plural - take first version
-                        versions_text = metadata_line.split(':', 1)[1].strip()
-                        cve_data["version"] = versions_text  # Keep as-is for now
-                    elif metadata_line.lower().startswith('installed version') and not cve_data["version"]:
-                        version_part = metadata_line.split(':', 1)[1].strip()
-                        if '(' in version_part:
-                            cve_data["version"] = version_part.split('(')[0].strip()
-                        else:
-                            cve_data["version"] = version_part
+                            cve_data["version"] = value
 
-                    # Fix/Recommended versions (multiple variations)
-                    elif metadata_line.lower().startswith('scanner recommendation:'):
-                        rec_part = metadata_line.split(':', 1)[1].strip()
+                    # Fix/Recommended versions - look for "fix", "recommend", "upgrade" keywords (substring match)
+                    elif ('fix' in field_lower or 'recommend' in field_lower or 'upgrade' in field_lower) and not cve_data["fixed_versions"]:
                         # Remove "upgrade to" prefix if present
-                        rec_part = re.sub(r'upgrade\s+to\s+', '', rec_part, flags=re.IGNORECASE)
+                        rec_part = re.sub(r'^\s*upgrade\s+to\s+', '', value, flags=re.IGNORECASE)
                         cve_data["fixed_versions"] = rec_part
-                    elif metadata_line.lower().startswith('fix / recommended version:'):
-                        cve_data["fixed_versions"] = metadata_line.split(':', 1)[1].strip()
-                    elif metadata_line.lower().startswith('fix') or 'recommended version' in metadata_line.lower():
-                        parts = metadata_line.split(':', 1)
-                        if len(parts) > 1 and not cve_data["fixed_versions"]:
-                            cve_data["fixed_versions"] = parts[1].strip()
 
-                    # Reference/NVD links
-                    elif metadata_line.lower().startswith('reference:'):
-                        cve_data["nvd_link"] = metadata_line.split(':', 1)[1].strip()
-                    elif metadata_line.lower().startswith('nvd:'):
-                        cve_data["nvd_link"] = metadata_line.split(':', 1)[1].strip()
+                    # Reference/NVD links - look for "reference", "nvd", "cve", "link", "detail" keywords (substring match)
+                    elif ('reference' in field_lower or 'nvd' in field_lower or 'cve' in field_lower or 'link' in field_lower or 'detail' in field_lower) and not cve_data["nvd_link"]:
+                        # Extract URL if present
+                        url_match = re.search(r'https?://[^\s]+', value)
+                        if url_match:
+                            cve_data["nvd_link"] = url_match.group(0)
+                        else:
+                            cve_data["nvd_link"] = value
 
                     j += 1
 
@@ -534,7 +554,8 @@ class TriageRunner(BaseRunner):
 
         try:
             # Run with Live display
-            with Live(layout, console=console, refresh_per_second=4) as live:
+            # Reduced refresh rate to minimize screen flicker (was 4)
+            with Live(layout, console=console, refresh_per_second=2) as live:
                 for service in self.services:
                     # Store full output for logs but don't display it
                     self.full_output.append(f"Starting triage analysis for {service}...")

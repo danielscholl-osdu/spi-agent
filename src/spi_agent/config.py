@@ -61,6 +61,7 @@ class AgentConfig:
         default_factory=lambda: [
             "--quiet",  # Suppress uvx output
             "mvn-mcp-server",
+            # Note: stderr is redirected to logs/maven_mcp_*.log by QuietMCPStdioTool
         ]
     )
 

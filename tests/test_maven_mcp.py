@@ -63,7 +63,7 @@ class TestMavenMCPManager:
 
     @pytest.mark.asyncio
     @patch("spi_agent.mcp.maven_mcp.shutil.which")
-    @patch("spi_agent.mcp.maven_mcp.MCPStdioTool")
+    @patch("spi_agent.mcp.maven_mcp.QuietMCPStdioTool")
     async def test_context_manager_success(
         self, mock_mcp_tool_class, mock_which, config
     ):
@@ -84,7 +84,7 @@ class TestMavenMCPManager:
 
     @pytest.mark.asyncio
     @patch("spi_agent.mcp.maven_mcp.shutil.which")
-    @patch("spi_agent.mcp.maven_mcp.MCPStdioTool")
+    @patch("spi_agent.mcp.maven_mcp.QuietMCPStdioTool")
     async def test_context_manager_file_not_found(
         self, mock_mcp_tool_class, mock_which, config
     ):
@@ -103,7 +103,7 @@ class TestMavenMCPManager:
 
     @pytest.mark.asyncio
     @patch("spi_agent.mcp.maven_mcp.shutil.which")
-    @patch("spi_agent.mcp.maven_mcp.MCPStdioTool")
+    @patch("spi_agent.mcp.maven_mcp.QuietMCPStdioTool")
     async def test_context_manager_general_error(
         self, mock_mcp_tool_class, mock_which, config
     ):
@@ -122,7 +122,7 @@ class TestMavenMCPManager:
 
     @pytest.mark.asyncio
     @patch("spi_agent.mcp.maven_mcp.shutil.which")
-    @patch("spi_agent.mcp.maven_mcp.MCPStdioTool")
+    @patch("spi_agent.mcp.maven_mcp.QuietMCPStdioTool")
     async def test_context_manager_cleanup_error(
         self, mock_mcp_tool_class, mock_which, config
     ):
@@ -157,8 +157,11 @@ class TestMavenMCPManager:
 
         assert Path(resolved) == target.resolve()
 
-    def test_resolve_workspace_path_existing_relative(self, config, tmp_path):
+    def test_resolve_workspace_path_existing_relative(self, config, tmp_path, monkeypatch):
         """Relative paths under repos should be normalized to absolute paths."""
+        # Change to tmp_path so relative paths resolve correctly
+        monkeypatch.chdir(tmp_path)
+
         manager = MavenMCPManager(config)
         repos_root = tmp_path / "repos"
         repos_root.mkdir()
@@ -202,7 +205,7 @@ class TestMavenMCPManager:
 
     @pytest.mark.asyncio
     @patch("spi_agent.mcp.maven_mcp.shutil.which")
-    @patch("spi_agent.mcp.maven_mcp.MCPStdioTool")
+    @patch("spi_agent.mcp.maven_mcp.QuietMCPStdioTool")
     async def test_tools_property_with_tool(
         self, mock_mcp_tool_class, mock_which, config
     ):
@@ -224,7 +227,7 @@ class TestMavenMCPManager:
 
     @pytest.mark.asyncio
     @patch("spi_agent.mcp.maven_mcp.shutil.which")
-    @patch("spi_agent.mcp.maven_mcp.MCPStdioTool")
+    @patch("spi_agent.mcp.maven_mcp.QuietMCPStdioTool")
     async def test_is_available_true(
         self, mock_mcp_tool_class, mock_which, config
     ):

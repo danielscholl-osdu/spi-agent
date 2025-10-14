@@ -1,9 +1,12 @@
 """Maven MCP Server integration for dependency management."""
 
+import asyncio
 import logging
 import os
 import shutil
+import subprocess
 import types
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +15,85 @@ from agent_framework import MCPStdioTool
 from spi_agent.config import AgentConfig
 
 logger = logging.getLogger(__name__)
+
+
+class QuietMCPStdioTool(MCPStdioTool):
+    """MCP stdio tool that redirects server stderr to a log file.
+
+    This prevents MCP server output (banners, startup messages, etc.) from
+    interfering with Rich Live display updates while preserving logs for debugging.
+
+    The implementation uses OS-level file descriptor manipulation (os.dup/dup2)
+    to redirect stderr before the subprocess is created, ensuring the MCP server
+    inherits the redirected stderr.
+    """
+
+    def __init__(self, *args, stderr_log_path: Optional[Path] = None, **kwargs):
+        """Initialize quiet MCP tool.
+
+        Args:
+            *args: Positional arguments for MCPStdioTool
+            stderr_log_path: Path to redirect stderr output (default: logs/maven_mcp_TIMESTAMP.log)
+            **kwargs: Keyword arguments for MCPStdioTool
+        """
+        super().__init__(*args, **kwargs)
+
+        # Generate timestamped log path following convention
+        if stderr_log_path is None:
+            logs_dir = Path("logs")
+            logs_dir.mkdir(exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            stderr_log_path = logs_dir / f"maven_mcp_{timestamp}.log"
+
+        self._stderr_log_path = stderr_log_path
+        self._stderr_file = None
+
+    async def __aenter__(self):
+        """Enter async context - start server with stderr redirected."""
+        # Open stderr log file before starting server
+        try:
+            self._stderr_file = open(self._stderr_log_path, "w", buffering=1)
+            self._stderr_file.write(f"Maven MCP Server Log - {datetime.now().isoformat()}\n")
+            self._stderr_file.write("=" * 70 + "\n\n")
+        except Exception as e:
+            logger.warning(f"Could not open stderr log file: {e}")
+            self._stderr_file = None
+
+        # Redirect stderr at the file descriptor level
+        # This will affect subprocess created during connect()
+        import sys
+        self._original_stderr_fd = None
+
+        try:
+            if self._stderr_file:
+                # Save original stderr file descriptor
+                self._original_stderr_fd = os.dup(sys.stderr.fileno())
+
+                # Redirect stderr to our log file
+                os.dup2(self._stderr_file.fileno(), sys.stderr.fileno())
+
+            # Call parent __aenter__ which will start the subprocess
+            # Subprocess will inherit the redirected stderr
+            result = await super().__aenter__()
+            return result
+        finally:
+            # Restore original stderr file descriptor
+            if self._original_stderr_fd is not None:
+                os.dup2(self._original_stderr_fd, sys.stderr.fileno())
+                os.close(self._original_stderr_fd)
+                self._original_stderr_fd = None
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit async context - cleanup stderr redirection."""
+        # Call parent cleanup first
+        result = await super().__aexit__(exc_type, exc_val, exc_tb)
+
+        # Close stderr log file
+        if self._stderr_file and not self._stderr_file.closed:
+            self._stderr_file.write(f"\n\nServer shutdown - {datetime.now().isoformat()}\n")
+            self._stderr_file.close()
+
+        return result
 
 
 class MavenMCPManager:
@@ -71,22 +153,17 @@ class MavenMCPManager:
             return self
 
         try:
-            # Build subprocess environment to suppress MCP server noise
+            # Build subprocess environment
             subprocess_env = os.environ.copy()
-            subprocess_env.update({
-                "PYTHONLOGGINGLEVEL": "WARNING",  # Allow WARNING+ but suppress INFO
-                "MCP_LOG_LEVEL": "WARNING",
-                "LOG_LEVEL": "WARNING",
-                "FASTMCP_QUIET": "1",  # Suppress FastMCP banner
-                "PYTHONWARNINGS": "ignore",  # Suppress Python warnings
-            })
 
-            # Initialize MCP stdio tool with controlled environment
-            self.mcp_tool = MCPStdioTool(
+            # Initialize QuietMCPStdioTool with stderr redirection
+            # This prevents MCP server output from interfering with Rich Live display
+            self.mcp_tool = QuietMCPStdioTool(
                 name="maven-mcp-server",
                 command=self.config.maven_mcp_command,
                 args=self.config.maven_mcp_args,
                 env=subprocess_env,
+                # stderr_log_path defaults to logs/maven_mcp_TIMESTAMP.log
             )
 
             # Enter the MCP tool's context
