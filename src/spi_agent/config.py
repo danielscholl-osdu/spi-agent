@@ -57,7 +57,12 @@ class AgentConfig:
 
     # Internal Maven MCP configuration (not user-configurable)
     maven_mcp_command: str = "uvx"
-    maven_mcp_args: List[str] = field(default_factory=lambda: ["mvn-mcp-server"])
+    maven_mcp_args: List[str] = field(
+        default_factory=lambda: [
+            "--quiet",  # Suppress uvx output
+            "mvn-mcp-server",
+        ]
+    )
 
     def validate(self) -> None:
         """Validate configuration and raise ValueError if invalid."""

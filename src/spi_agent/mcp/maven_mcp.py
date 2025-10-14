@@ -1,6 +1,7 @@
 """Maven MCP Server integration for dependency management."""
 
 import logging
+import os
 import shutil
 from typing import List, Optional
 
@@ -64,21 +65,61 @@ class MavenMCPManager:
             return self
 
         try:
-            # Initialize MCP stdio tool
-            self.mcp_tool = MCPStdioTool(
-                name="maven-mcp-server",
-                command=self.config.maven_mcp_command,
-                args=self.config.maven_mcp_args,
-            )
+            # Suppress MCP server logs by setting environment variables
+            # Save original env vars
+            original_env = {}
+            env_keys = ["PYTHONLOGGINGLEVEL", "MCP_LOG_LEVEL", "LOG_LEVEL", "FASTMCP_QUIET", "PYTHONWARNINGS"]
 
-            # Enter the MCP tool's context
-            await self.mcp_tool.__aenter__()
+            for key in env_keys:
+                original_env[key] = os.environ.get(key)
 
-            logger.info("Maven MCP server initialized successfully")
-            logger.info(
-                f"Available tools: {len(self.tools)} "
-                f"(Trivy required for security scanning)"
-            )
+            # Set logging to ERROR to suppress INFO logs from MCP server
+            os.environ["PYTHONLOGGINGLEVEL"] = "ERROR"
+            os.environ["MCP_LOG_LEVEL"] = "ERROR"
+            os.environ["LOG_LEVEL"] = "ERROR"
+            os.environ["FASTMCP_QUIET"] = "1"  # Suppress FastMCP banner
+            os.environ["PYTHONWARNINGS"] = "ignore"  # Suppress Python warnings
+
+            # Temporarily suppress logging from mcp.server modules
+            mcp_logger = logging.getLogger("mcp")
+            original_mcp_level = mcp_logger.level
+            mcp_logger.setLevel(logging.ERROR)
+
+            fastmcp_logger = logging.getLogger("fastmcp")
+            original_fastmcp_level = fastmcp_logger.level
+            fastmcp_logger.setLevel(logging.ERROR)
+
+            mvn_logger = logging.getLogger("mvn_mcp_server")
+            original_mvn_level = mvn_logger.level
+            mvn_logger.setLevel(logging.ERROR)
+
+            try:
+                # Initialize MCP stdio tool
+                self.mcp_tool = MCPStdioTool(
+                    name="maven-mcp-server",
+                    command=self.config.maven_mcp_command,
+                    args=self.config.maven_mcp_args,
+                )
+
+                # Enter the MCP tool's context
+                await self.mcp_tool.__aenter__()
+
+                logger.info("Maven MCP server initialized successfully")
+                logger.info(
+                    f"Available tools: {len(self.tools)} "
+                    f"(Trivy required for security scanning)"
+                )
+            finally:
+                # Restore original environment and logging levels
+                for key, value in original_env.items():
+                    if value is not None:
+                        os.environ[key] = value
+                    else:
+                        os.environ.pop(key, None)
+
+                mcp_logger.setLevel(original_mcp_level)
+                fastmcp_logger.setLevel(original_fastmcp_level)
+                mvn_logger.setLevel(original_mvn_level)
 
         except FileNotFoundError as e:
             logger.error(

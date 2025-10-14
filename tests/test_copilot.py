@@ -1,10 +1,10 @@
-"""Tests for copilot module (TestRunner, TestTracker)."""
+"""Tests for copilot module (TestRunner, TestTracker, TriageRunner, TriageTracker)."""
 
 from unittest.mock import Mock, patch
 
 import pytest
 
-from spi_agent.copilot import SERVICES, TestRunner, TestTracker, parse_services
+from spi_agent.copilot import SERVICES, TestRunner, TestTracker, TriageRunner, TriageTracker, parse_services
 
 
 class TestParseServices:
