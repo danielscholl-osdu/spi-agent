@@ -69,7 +69,7 @@ class TestTracker:
 
     def get_table(self) -> Table:
         """Generate Rich table of test status"""
-        table = Table(title="Test Execution Status", expand=True)
+        table = Table(title="Service Status", expand=True)
         table.add_column("Service", style="cyan", no_wrap=True)
         table.add_column("Provider", style="blue", no_wrap=True)
         table.add_column("Status", style="yellow")

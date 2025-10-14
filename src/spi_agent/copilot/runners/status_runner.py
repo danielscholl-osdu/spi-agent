@@ -78,7 +78,7 @@ class StatusRunner:
                 else:
                     output_text.append(line + "\n", style="white")
 
-        return Panel(output_text, title="📋 Copilot Activity", border_style="blue")
+        return Panel(output_text, title="📋 Agent Output", border_style="blue")
 
     def parse_status_line(self, line: str):
         """Parse copilot output to track which services are being queried"""

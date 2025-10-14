@@ -87,7 +87,7 @@ class CopilotRunner:
                 else:
                     output_text.append(line + "\n", style="white")
 
-        return Panel(output_text, title="📋 Live Output", border_style="blue")
+        return Panel(output_text, title="📋 Agent Output", border_style="blue")
 
     def create_layout(self) -> Layout:
         """Create split layout with status and output"""
@@ -120,8 +120,6 @@ class CopilotRunner:
         # Detect global completion messages (multiple patterns)
         completion_patterns = [
             "successfully completed repository initialization",
-            "successfully completed workflow for",
-            "✅ successfully completed workflow for",
             "all repositories are now:",
             "repository status:",
         ]
@@ -131,6 +129,32 @@ class CopilotRunner:
                 status = self.tracker.services[service]["status"]
                 if status not in ["success", "skipped", "error"]:
                     self.tracker.update(service, "success", "Completed successfully")
+
+        # Detect per-service completion message using flexible keyword matching
+        # AI-generated messages may vary, so we use a scoring approach:
+        # - Must contain service name + "service" keyword (for specificity)
+        # - Must contain 2+ success/completion keywords (for confidence)
+        # - Must NOT contain exclusion words (to avoid false positives)
+
+        success_keywords = ["success", "successfully", "completed", "complete", "finished"]
+        exclusion_keywords = ["waiting", "starting", "initiated", "checking", "attempting", "not"]
+
+        for service in self.services:
+            # Check if line mentions this service with the word "service"
+            # This ensures we're talking about the service itself, not just using the word in context
+            service_mentioned = service in line_lower and "service" in line_lower
+
+            if service_mentioned:
+                # Count success keywords present
+                success_count = sum(1 for keyword in success_keywords if keyword in line_lower)
+
+                # Check for exclusion words (mid-process indicators)
+                has_exclusion = any(keyword in line_lower for keyword in exclusion_keywords)
+
+                # Score-based detection: 2+ success keywords AND no exclusions = completion
+                if success_count >= 2 and not has_exclusion:
+                    self.tracker.update(service, "success", "Completed successfully")
+                    break  # Only one service per line
 
         # Find currently active service (first non-completed service)
         active_service = None
@@ -249,6 +273,10 @@ class CopilotRunner:
             # Create split layout
             layout = self.create_layout()
 
+            # Initialize panels with content before entering Live context
+            layout["status"].update(self.tracker.get_table())
+            layout["output"].update(self.get_output_panel())
+
             # Live display with split view: status table (left) and output (right)
             with Live(layout, console=console, refresh_per_second=4) as live:
                 # Read stdout line by line
@@ -270,13 +298,14 @@ class CopilotRunner:
                 # Wait for process to complete
                 process.wait()
 
-                # Update layout with final summary in left panel
-                layout["status"].update(self.get_summary_panel(process.returncode))
-                # Force one final refresh to show the summary
-                live.refresh()
+                # Keep final status table visible in layout
+                # No need to update - last parse updates are already showing
 
-            # Print final layout one more time so it stays visible
-            console.print(layout)
+            # ALL post-processing happens OUTSIDE Live context to prevent panel jumping
+            console.print()  # Add spacing
+
+            # Print the final summary panel as a separate panel below
+            console.print(self.get_summary_panel(process.returncode))
 
             # Save full output to log file
             self._save_log(process.returncode)
@@ -315,49 +344,76 @@ class CopilotRunner:
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 
     def get_summary_panel(self, return_code: int) -> Panel:
-        """Generate final summary panel"""
-        # Count status
-        status_counts = {
-            "success": 0,
-            "error": 0,
-            "skipped": 0,
-            "pending": 0,
-        }
+        """Generate final summary panel with clean table layout"""
+        from rich.table import Table
+
+        # Create table for results
+        table = Table(expand=True, show_header=True, header_style="bold cyan")
+        table.add_column("Service", style="cyan", no_wrap=True)
+        table.add_column("Branch", style="blue", no_wrap=True)
+        table.add_column("Status", style="yellow", no_wrap=True)
+        table.add_column("Result", style="white", ratio=2)
+
+        # Count statuses for footer
+        status_counts = {"success": 0, "error": 0, "skipped": 0, "pending": 0}
+
         for service, data in self.tracker.services.items():
-            status_counts[data["status"]] = status_counts.get(data["status"], 0) + 1
+            status = data["status"]
+            status_counts[status] = status_counts.get(status, 0) + 1
 
-        summary_style = "green" if return_code == 0 else "red"
-        summary_text = "✓ Completed" if return_code == 0 else "✗ Failed"
+            # Determine status display and color
+            status_display = ""
+            status_style = "white"
 
-        # Build detailed service list
-        service_list = []
-        for service, data in self.tracker.services.items():
-            icon = data["icon"]
-            status = data["status"].upper()
-            details = data["details"]
+            if status == "success":
+                status_display = "✓ Initialized"
+                status_style = "green"
+            elif status == "skipped":
+                status_display = "⊘ Skipped"
+                status_style = "yellow"
+            elif status == "error":
+                status_display = "✗ Failed"
+                status_style = "red"
+            elif status == "pending":
+                status_display = "⏸ Pending"
+                status_style = "dim"
+            else:
+                status_display = f"{data['icon']} {status.title()}"
+                status_style = "dim"
 
-            status_color = {
-                "success": "green",
-                "error": "red",
-                "skipped": "yellow",
-                "pending": "dim"
-            }.get(data["status"], "white")
+            # Format result/details
+            details = data.get("details", "")
 
-            service_list.append(f"  [{status_color}]{icon} {service:<15} {status:<10}[/{status_color}] {details}")
+            # Add repository URL for successful/skipped services
+            if status in ["success", "skipped"]:
+                repo_url = f"github.com/{config.organization}/{service}"
+                result = f"{details}\n[dim]{repo_url}[/dim]"
+            else:
+                result = details
 
-        services_text = "\n".join(service_list)
+            table.add_row(
+                service,
+                self.branch,
+                f"[{status_style}]{status_display}[/{status_style}]",
+                result
+            )
 
-        summary = f"""[{summary_style}]{'='*50}[/{summary_style}]
-[{summary_style}]{summary_text}[/{summary_style}]
-[{summary_style}]{'='*50}[/{summary_style}]
+        # Add footer row with summary
+        table.add_section()
+        summary_text = (
+            f"[green]✓ {status_counts['success']} Success[/green]  "
+            f"[yellow]⊘ {status_counts['skipped']} Skipped[/yellow]  "
+            f"[red]✗ {status_counts['error']} Errors[/red]  "
+            f"[dim]⏸ {status_counts['pending']} Pending[/dim]"
+        )
+        table.add_row("", "", "", summary_text, style="dim")
 
-[bold]Services:[/bold]
-{services_text}
+        # Determine panel style based on return code
+        border_style = "green" if return_code == 0 else "red"
+        title_emoji = "✓" if return_code == 0 else "✗"
 
-[bold]Summary:[/bold]
-[green]✓ Success:[/green]  {status_counts.get('success', 0)}
-[yellow]⊘ Skipped:[/yellow] {status_counts.get('skipped', 0)}
-[red]✗ Errors:[/red]   {status_counts.get('error', 0)}
-[dim]⏸ Pending:[/dim]  {status_counts.get('pending', 0)}"""
-
-        return Panel(summary, title="📊 Final Report", border_style=summary_style)
+        return Panel(
+            table,
+            title=f"{title_emoji} Fork Results",
+            border_style=border_style
+        )

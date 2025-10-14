@@ -23,8 +23,8 @@ class ServiceTracker:
         if service in self.services:
             icons = {
                 "pending": "⏸",
-                "running": "⏳",
-                "waiting": "⏱",
+                "running": "▶",
+                "waiting": "▶",
                 "success": "✓",
                 "error": "✗",
                 "skipped": "⊘",
@@ -35,7 +35,7 @@ class ServiceTracker:
 
     def get_table(self) -> Table:
         """Generate Rich table of service status"""
-        table = Table(title="Service Processing Status", expand=True)
+        table = Table(title="Service Status", expand=True)
         table.add_column("Service", style="cyan", no_wrap=True)
         table.add_column("Status", style="magenta")
         table.add_column("Details", style="white")
