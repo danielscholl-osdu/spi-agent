@@ -1492,10 +1492,15 @@ class TestRunner:
         # Copilot tells us everything we need through its task markers
 
         # Find which service this line is about
+        # Use word boundary matching to avoid "indexer" matching "indexer-queue"
         target_service = None
         for service in self.services:
-            # Match service name in various formats: "partition", "Partition", "**partition**"
-            if service in line_lower or f"**{service}**" in line_lower:
+            # Look for service name followed by colon (most reliable pattern)
+            if f"{service}:" in line_lower:
+                target_service = service
+                break
+            # Also check for service name with word boundaries
+            if re.search(rf'\b{re.escape(service)}\b', line_lower):
                 target_service = service
                 break
 
@@ -1674,12 +1679,29 @@ class TestRunner:
                     base_path / "target" / "site" / "jacoco" / "index.html",
                 ]
 
-                # Also check provider-specific subdirectories
+                # Check provider-specific subdirectories (e.g., provider/partition-azure)
                 provider_dir = base_path / "provider"
                 if provider_dir.exists():
                     for subdir in provider_dir.iterdir():
                         if subdir.is_dir():
                             report_paths.append(subdir / "target" / "site" / "jacoco" / "index.html")
+
+                # Check module subdirectories with provider suffix (e.g., indexer-queue-azure-enqueue)
+                # Look for modules matching {service}-{provider} or {service}-{provider}-*
+                azure_modules = []
+                other_modules = []
+                for item in base_path.iterdir():
+                    if item.is_dir() and item.name.startswith(f"{service}-"):
+                        report_path = item / "target" / "site" / "jacoco" / "index.html"
+                        # Prioritize provider-specific modules
+                        if self.provider in item.name:
+                            azure_modules.append(report_path)
+                        else:
+                            other_modules.append(report_path)
+
+                # Add provider-specific modules first, then fallback to any module
+                report_paths.extend(azure_modules)
+                report_paths.extend(other_modules)
 
                 for report_path in report_paths:
                     if report_path.exists():
