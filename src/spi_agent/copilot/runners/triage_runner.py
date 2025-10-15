@@ -135,72 +135,6 @@ class TriageRunner(BaseRunner):
                     critical=critical,
                 )
 
-    async def _monitor_maven_mcp_log(self, service: str, layout, live, stop_event: asyncio.Event):
-        """Monitor Maven MCP log file and display key events in output panel.
-
-        Args:
-            service: Service name being analyzed
-            layout: Rich layout object for display updates
-            live: Rich Live context for refreshing
-            stop_event: Event to signal when to stop monitoring
-        """
-        from spi_agent.copilot.config import log_dir
-
-        # Find the latest maven_mcp log file
-        maven_logs = sorted(log_dir.glob("maven_mcp_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not maven_logs:
-            return
-
-        log_file = maven_logs[0]
-        last_position = 0
-
-        # Track what we've already shown to avoid duplicates
-        shown_events = set()
-
-        while not stop_event.is_set():
-            try:
-                with open(log_file, 'r') as f:
-                    f.seek(last_position)
-                    new_lines = f.readlines()
-                    last_position = f.tell()
-
-                    for line in new_lines:
-                        line = line.strip()
-                        if not line or service not in line.lower():
-                            continue
-
-                        # Parse key events from Maven MCP log
-                        if "MCP call to scan_java_project" in line and "scan_java_project" not in shown_events:
-                            self.output_lines.append("   ↪ MCP tool: scan_java_project")
-                            shown_events.add("scan_java_project")
-                            layout["output"].update(self.get_output_panel())
-                            live.refresh()
-
-                        elif "Running Trivy command:" in line and "trivy_cmd" not in shown_events:
-                            # Extract the trivy command
-                            if "trivy fs" in line:
-                                self.output_lines.append("   ↪ Executing: trivy fs --security-checks vuln")
-                                shown_events.add("trivy_cmd")
-                                layout["output"].update(self.get_output_panel())
-                                live.refresh()
-
-                        elif "Found" in line and "vulnerabilities" in line and "found_vulns" not in shown_events:
-                            # Extract vulnerability counts from log
-                            # Format: "Found 161 vulnerabilities: {'critical': 4, 'high': 71, 'medium': 67, 'low': 19, 'unknown': 0}"
-                            import re
-                            match = re.search(r"Found (\d+) vulnerabilities:", line)
-                            if match:
-                                total = match.group(1)
-                                self.output_lines.append(f"   ↪ Scan complete: {total} vulnerabilities detected")
-                                shown_events.add("found_vulns")
-                                layout["output"].update(self.get_output_panel())
-                                live.refresh()
-
-                await asyncio.sleep(0.5)  # Check log every 500ms
-
-            except Exception:
-                # Log file might not exist yet or might be locked, continue
-                await asyncio.sleep(0.5)
 
     async def run_triage_for_service(self, service: str, layout, live) -> str:
         """Run triage analysis for a single service with live progress updates.
@@ -217,13 +151,6 @@ class TriageRunner(BaseRunner):
 
         # Update tracker
         self.tracker.update(service, "analyzing", "Starting triage analysis")
-
-        # Add to output panel (matches log format)
-        self.output_lines.append(f"Starting triage analysis for {service}...")
-
-        layout["status"].update(self.tracker.get_table())
-        layout["output"].update(self.get_output_panel())
-        live.refresh()
 
         # Construct very direct prompt to execute the scan tool immediately
         # Note: include_profiles and severity_filter will be supported in future MCP server versions
@@ -258,14 +185,12 @@ Provide a concise summary with:
         if self.create_issue:
             prompt += "\n- After the scan, create a GitHub tracking issue with the findings"
 
-        log_stop_event = None
-        log_monitor_task = None
-
         try:
             # Update status to scanning
             self.tracker.update(service, "scanning", "Running vulnerability scan...")
 
             # Add scan initiation to output panel (status command style)
+            self.output_lines.append(f"Starting triage analysis for {service}...")
             self.output_lines.append(f"✓ Scan Java project")
             self.output_lines.append(f"   $ scan_java_project_tool workspace: ./repos/{service}")
             self.output_lines.append(f"   ↪ Running Trivy security scan...")
@@ -277,12 +202,6 @@ Provide a concise summary with:
             # Create a task for the agent call
             agent_task = asyncio.create_task(
                 self.agent.agent.run(prompt, thread=self.agent.agent.get_new_thread())
-            )
-
-            # Start monitoring Maven MCP log in parallel
-            log_stop_event = asyncio.Event()
-            log_monitor_task = asyncio.create_task(
-                self._monitor_maven_mcp_log(service, layout, live, log_stop_event)
             )
 
             # Show progress while waiting
@@ -314,10 +233,6 @@ Provide a concise summary with:
             # Get the response
             response = await agent_task
 
-            # Stop log monitoring
-            log_stop_event.set()
-            await log_monitor_task
-
             # Update status to processing results
             self.tracker.update(service, "reporting", "Processing scan results...")
             layout["status"].update(self.tracker.get_table())
@@ -327,21 +242,26 @@ Provide a concise summary with:
             response_str = str(response)
             self.parse_agent_response(service, response_str)
 
-            # Add scan completion message with results (status command style)
+            # Failsafe: Ensure status is marked complete if still scanning/reporting
             svc_data = self.tracker.services[service]
-            total_vulns = svc_data['critical'] + svc_data['high'] + svc_data['medium']
-            self.output_lines.append(f"   ↪ Found {total_vulns} vulnerabilities (critical: {svc_data['critical']}, high: {svc_data['high']}, medium: {svc_data['medium']})")
+            if svc_data['status'] in ['scanning', 'reporting', 'analyzing']:
+                # Force completion with whatever counts we have (even if 0)
+                self.tracker.update(
+                    service,
+                    "complete",
+                    f"{svc_data['critical'] + svc_data['high'] + svc_data['medium']} vulnerabilities found"
+                )
+                svc_data = self.tracker.services[service]  # Refresh data
 
-            # Show agent response in output panel (first 30 lines)
-            response_lines = response_str.split('\n')
-            for line in response_lines[:30]:
-                if line.strip():  # Skip empty lines
-                    self.output_lines.append(line)
+            # Add simple completion message
+            total_vulns = svc_data['critical'] + svc_data['high'] + svc_data['medium']
+            self.output_lines.append(f"✓ Analysis complete for {service}")
+            self.output_lines.append("")  # Add blank line between services
 
             # Also store in full_output for logs
-            for line in response_lines:
-                if line.strip():
-                    self.full_output.append(line)
+            self.full_output.append(f"=== {service.upper()} SCAN RESULTS ===")
+            self.full_output.append(response_str)
+            self.full_output.append("")
 
             # Update display with agent response
             layout["output"].update(self.get_output_panel())
@@ -351,11 +271,6 @@ Provide a concise summary with:
             return response_str
 
         except Exception as e:
-            # Stop log monitoring if it was started
-            if log_stop_event and log_monitor_task:
-                log_stop_event.set()
-                await log_monitor_task
-
             self.tracker.update(service, "error", f"Failed: {str(e)[:50]}")
             layout["status"].update(self.tracker.get_table())
             live.refresh()
@@ -370,7 +285,7 @@ Provide a concise summary with:
         """
         response_lower = response.lower()
 
-        # Try to extract vulnerability counts from response
+        # Try to extract vulnerability counts from response FIRST
         # Pattern 1: "X critical, Y high, Z medium"
         vuln_pattern = r'(\d+)\s+critical.*?(\d+)\s+high.*?(\d+)\s+medium'
         match = re.search(vuln_pattern, response_lower)
@@ -396,6 +311,57 @@ Provide a concise summary with:
             medium_match = re.search(r'medium[:\s]+(\d+)', response_lower)
             if medium_match:
                 medium = int(medium_match.group(1))
+
+        # Only check for failures if we found NO vulnerability counts at all
+        # This prevents false positives where scans succeed but agent mentions errors in explanation
+        if critical == 0 and high == 0 and medium == 0:
+            # Common failure indicators from Maven MCP scan failures
+            failure_indicators = [
+                'scan failed',
+                'failed to complete',
+                'fatal error.*run error',  # More specific - "fatal error: run error"
+                'scan.*aborted',  # More specific
+                'scan.*timeout',  # More specific - "scan timeout" not just any timeout
+                'could not.*scan',  # More specific
+                'no vulnerability results were produced',
+                'no vulnerabilities available',
+                'scan did not complete',
+                'database.*lock.*error',  # More specific - "database lock error"
+            ]
+
+            # Check for failure patterns
+            is_failure = False
+            failure_reason = "Scan failed"
+
+            for indicator in failure_indicators:
+                if re.search(indicator, response_lower):
+                    is_failure = True
+                    # Try to extract a concise failure reason
+                    if 'database' in response_lower and 'lock' in response_lower:
+                        failure_reason = "Database lock error"
+                    elif 'scan' in response_lower and 'timeout' in response_lower:
+                        failure_reason = "Scan timeout"
+                    elif 'fatal error' in response_lower:
+                        failure_reason = "Fatal error during scan"
+                    elif 'no vulnerability results' in response_lower:
+                        failure_reason = "Scan produced no results"
+                    break
+
+            # If scan failed, mark as error and return early
+            if is_failure:
+                self.tracker.update(
+                    service,
+                    "error",
+                    failure_reason,
+                    critical=0,
+                    high=0,
+                    medium=0,
+                    dependencies=0,
+                    report_id="",
+                    top_cves=[],
+                    remediation="",
+                )
+                return
 
         # Extract dependency count if available
         dependencies = 0
@@ -466,11 +432,12 @@ Provide a concise summary with:
             line = lines[i].strip()
 
             # Try flexible CVE header patterns
-            # Format 1: CVE-2025-24813 (critical)  <- Severity in parentheses
-            # Format 2: CVE-2025-24813 — critical  <- Severity after em-dash
-            # Format 3: CVE-2025-24813             <- CVE alone
+            # Format 1: 1) CVE-2025-24813 (critical)  <- Severity in parentheses
+            # Format 2: 1) CVE-2025-24813 — critical  <- Severity after em-dash
+            # Format 3: - 1) CVE-2025-24813           <- With leading dash (legal format)
+            # Format 4: 1) CVE-2025-24813             <- CVE alone
 
-            cve_match = re.match(r'^\d+\)\s+(CVE-\d{4}-\d+)(?:\s+[—-]\s+|\s+\()?([^)\n]+)?', line, re.IGNORECASE)
+            cve_match = re.match(r'^-?\s*\d+\)\s+(CVE-\d{4}-\d+)(?:\s+[—-]\s+|\s+\()?([^)\n]+)?', line, re.IGNORECASE)
 
             if cve_match:
                 cve_id = cve_match.group(1)
@@ -542,9 +509,19 @@ Provide a concise summary with:
                     # Package/Artifact - look for "affected", "package", or "artifact" keywords
                     elif ('affected' in field_lower or 'package' in field_lower or 'artifact' in field_lower) and not cve_data["package"]:
                         # Remove extra context like version info
-                        package_name = re.split(r'\s*—\s+installed|\s+—\s+installed|\(installed', value, maxsplit=1)[0].strip()
+                        # Format 1: "org.springframework:spring-beans @ 5.2.7.RELEASE"
+                        # Format 2: "org.springframework:spring-beans"
+                        package_name = re.split(r'\s*—\s+installed|\s+—\s+installed|\(installed|@', value, maxsplit=1)[0].strip()
                         if package_name:
                             cve_data["package"] = package_name
+
+                        # Extract inline version if present (Format: package @ version)
+                        if '@' in value and not cve_data["version"]:
+                            version_part = value.split('@', 1)[1].strip()
+                            # Remove any trailing context
+                            version_part = re.split(r'\s*\(|\s*—', version_part, maxsplit=1)[0].strip()
+                            if version_part:
+                                cve_data["version"] = version_part
 
                     # Version - look for "installed" and "version" keywords together
                     elif ('installed' in field_lower and 'version' in field_lower) and not cve_data["version"]:
@@ -555,6 +532,7 @@ Provide a concise summary with:
                             cve_data["version"] = value
 
                     # Fix/Recommended versions - look for "fix", "recommend", "upgrade" keywords (substring match)
+                    # Matches: "Recommended fixed versions (scanner):", "Recommendation/fix:", "Recommended fixed version:"
                     elif ('fix' in field_lower or 'recommend' in field_lower or 'upgrade' in field_lower) and not cve_data["fixed_versions"]:
                         # Remove "upgrade to" prefix if present
                         rec_part = re.sub(r'^\s*upgrade\s+to\s+', '', value, flags=re.IGNORECASE)
@@ -610,58 +588,298 @@ Provide a concise summary with:
 
         return ""
 
-    def get_cve_details_panel(self) -> Panel:
-        """Generate CVE details panel showing vulnerability information.
+    def _calculate_service_grade(self, critical: int, high: int, medium: int) -> str:
+        """Calculate security grade for a service based on vulnerability counts.
+
+        Args:
+            critical: Number of critical vulnerabilities
+            high: Number of high vulnerabilities
+            medium: Number of medium vulnerabilities
 
         Returns:
-            Rich Panel with CVE details
+            Letter grade (A, B, C, D, F)
         """
-        from rich.markdown import Markdown
+        # Grade criteria (more lenient for real-world dependency management)
+        # Both conditions must be met for each grade (AND not OR)
+        if critical == 0 and high <= 10:
+            return "A"
+        elif critical <= 3 and high <= 40:
+            return "B"
+        elif critical <= 15 and high <= 100:
+            return "C"
+        elif critical <= 40 and high <= 200:
+            return "D"
+        else:
+            return "F"
+
+    def _calculate_overall_grade(self) -> str:
+        """Calculate overall security grade across all services.
+
+        Returns:
+            Letter grade (A, B, C, D, F)
+        """
+        summary = self.tracker.get_summary()
+        critical = summary["critical"]
+        high = summary["high"]
+
+        # Overall grade (more lenient, recognizing multiple services compound issues)
+        # Both conditions must be met for each grade (AND not OR)
+        if critical == 0 and high <= 15:
+            return "A"
+        elif critical <= 8 and high <= 75:
+            return "B"
+        elif critical <= 25 and high <= 200:
+            return "C"
+        elif critical <= 70 and high <= 400:
+            return "D"
+        else:
+            return "F"
+
+    def _get_risk_level(self, grade: str) -> tuple[str, str]:
+        """Get risk level and color based on grade.
+
+        Args:
+            grade: Letter grade
+
+        Returns:
+            Tuple of (risk_level, color)
+        """
+        risk_mapping = {
+            "A": ("CLEAN", "green"),
+            "B": ("LOW", "blue"),
+            "C": ("MODERATE", "yellow"),
+            "D": ("HIGH", "red"),
+            "F": ("CRITICAL", "red bold"),
+        }
+        return risk_mapping.get(grade, ("UNKNOWN", "white"))
+
+    def _get_recommendation(self, critical: int, high: int, grade: str) -> str:
+        """Get security recommendation based on vulnerability counts and grade.
+
+        Args:
+            critical: Number of critical vulnerabilities
+            high: Number of high vulnerabilities
+            grade: Letter grade
+
+        Returns:
+            Recommendation text
+        """
+        if grade == "A":
+            return "Excellent security posture - maintain current standards"
+        elif grade == "B":
+            if high > 0:
+                return f"Address {high} high-severity vulnerabilities in next sprint"
+            return "Good security posture - schedule routine updates"
+        elif grade == "C":
+            if critical > 0:
+                return f"PRIORITY: Patch {critical} critical CVE(s) immediately, then address high-severity issues"
+            return f"Address {high} high-severity vulnerabilities within 2 weeks"
+        elif grade == "D":
+            if critical > 0:
+                return f"URGENT: Patch {critical} critical CVE(s) this week and create remediation plan for {high} high-severity issues"
+            return f"Create immediate remediation plan for {high} high-severity vulnerabilities"
+        else:  # F
+            return f"CRITICAL: Immediate action required - {critical} critical and {high} high-severity vulnerabilities pose significant risk"
+
+    def get_security_assessment_panel(self) -> Panel:
+        """Generate security assessment panel with table format like test results.
+
+        Returns:
+            Rich Panel with security grade table
+        """
         from rich.text import Text
 
-        # Collect all CVEs from all services
-        all_cves = []
-        for service, data in self.tracker.services.items():
-            cves = data.get("top_cves", [])
-            for cve in cves:
-                # Add service name to CVE
-                cve_with_service = cve.copy()
-                cve_with_service["service"] = service
-                all_cves.append(cve_with_service)
+        # Create table
+        table = Table(show_header=True, header_style="bold", box=None)
+        table.add_column("Service", style="cyan", width=12)
+        table.add_column("Result", style="white", width=25)
+        table.add_column("Grade", justify="center", width=7)
+        table.add_column("Recommendation", style="white")
 
-        if not all_cves:
+        # Add rows for each service
+        for service, data in self.tracker.services.items():
+            status = data.get("status", "unknown")
+
+            # Check if scan failed (error status)
+            if status == "error":
+                # Display error status instead of grades
+                error_details = data.get("details", "Scan failed")
+                result_text = Text(f"Error: {error_details}", style="red")
+                grade_text = Text("—", style="dim")  # Use em-dash for no grade
+                recommendation = "Resolve scan error and re-run (check logs for details)"
+
+                table.add_row(
+                    service,
+                    result_text,
+                    grade_text,
+                    recommendation
+                )
+                continue
+
+            # Normal processing for successful scans
+            critical = data.get("critical", 0)
+            high = data.get("high", 0)
+            medium = data.get("medium", 0)
+            total = critical + high + medium
+
+            # Calculate grade
+            svc_grade = self._calculate_service_grade(critical, high, medium)
+
+            # Grade styling
+            grade_style = {
+                "A": "green bold",
+                "B": "blue bold",
+                "C": "yellow bold",
+                "D": "red bold",
+                "F": "red bold"
+            }.get(svc_grade, "white")
+
+            # Result text with breakdown
+            if total == 0:
+                result_text = Text("Passed (0 vulnerabilities)", style="green")
+            else:
+                result_parts = []
+                if critical > 0:
+                    result_parts.append(f"{critical}C")
+                if high > 0:
+                    result_parts.append(f"{high}H")
+                if medium > 0:
+                    result_parts.append(f"{medium}M")
+
+                result_str = f"Found {total} issues ({', '.join(result_parts)})"
+                if critical > 0:
+                    result_text = Text(result_str, style="red")
+                elif high > 0:
+                    result_text = Text(result_str, style="yellow")
+                else:
+                    result_text = Text(result_str, style="blue")
+
+            # Get recommendation
+            recommendation = self._get_recommendation(critical, high, svc_grade)
+
+            # Add row
+            table.add_row(
+                service,
+                result_text,
+                Text(svc_grade, style=grade_style),
+                recommendation
+            )
+
+        # Calculate overall assessment
+        summary = self.tracker.get_summary()
+        overall_grade = self._calculate_overall_grade()
+        risk_level, risk_color = self._get_risk_level(overall_grade)
+
+        # Create subtitle with overall stats
+        total_services = len(self.tracker.services)
+        subtitle = f"Overall Grade: [{risk_color}]{overall_grade}[/{risk_color}] | "
+        subtitle += f"Risk Level: [{risk_color}]{risk_level}[/{risk_color}] | "
+        subtitle += f"{total_services} service{'s' if total_services > 1 else ''} scanned | "
+        subtitle += f"{summary['critical']}C / {summary['high']}H / {summary['medium']}M vulnerabilities"
+
+        # Determine border color based on overall grade
+        border_color = {
+            "A": "green",
+            "B": "blue",
+            "C": "yellow",
+            "D": "red",
+            "F": "red"
+        }.get(overall_grade, "blue")
+
+        return Panel(
+            table,
+            title="🛡️ Security Assessment",
+            subtitle=subtitle,
+            border_style=border_color,
+            padding=(1, 2)
+        )
+
+    async def _analyze_cves_with_agent(self) -> str:
+        """Use agent to analyze and consolidate CVE findings across services.
+
+        Returns:
+            Agent-generated CVE analysis report
+        """
+        # Build log content from in-memory data (same format as saved log)
+        summary = self.tracker.get_summary()
+
+        log_parts = []
+        log_parts.append("="*70)
+        log_parts.append("Maven Triage Analysis Log")
+        log_parts.append("="*70)
+        log_parts.append(f"Timestamp: {datetime.now().isoformat()}")
+        log_parts.append(f"Services: {', '.join(self.services)}")
+        log_parts.append(f"Severity Filter: {', '.join(self.severity_filter)}")
+        log_parts.append(f"="*70)
+        log_parts.append("")
+        log_parts.append("=== TRIAGE RESULTS ===")
+        log_parts.append("")
+
+        for service, data in self.tracker.services.items():
+            log_parts.append(f"{service}:")
+            log_parts.append(f"  Status: {data['status']}")
+            log_parts.append(f"  Critical: {data['critical']}")
+            log_parts.append(f"  High: {data['high']}")
+            log_parts.append(f"  Medium: {data['medium']}")
+            log_parts.append("")
+
+        log_parts.append("=== SUMMARY ===")
+        log_parts.append("")
+        log_parts.append(f"Total Services: {summary['total_services']}")
+        log_parts.append(f"Total Critical: {summary['critical']}")
+        log_parts.append(f"Total High: {summary['high']}")
+        log_parts.append(f"Total Medium: {summary['medium']}")
+        log_parts.append("")
+        log_parts.append("=== FULL OUTPUT ===")
+        log_parts.append("")
+        log_parts.extend(self.full_output)
+
+        log_content = "\n".join(log_parts)
+
+        # Load CVE analysis prompt template
+        try:
+            from importlib.resources import files
+            prompt_file = files("spi_agent.copilot.prompts").joinpath("cve_analysis.md")
+            prompt_template = prompt_file.read_text(encoding="utf-8")
+
+            # Replace placeholder with actual scan results
+            prompt = prompt_template.replace("{{SCAN_RESULTS}}", log_content)
+        except Exception as e:
+            return f"Error loading CVE analysis prompt: {e}"
+
+        try:
+            # Call agent to analyze
+            response = await self.agent.agent.run(
+                prompt,
+                thread=self.agent.agent.get_new_thread()
+            )
+            return str(response)
+        except Exception as e:
+            return f"Error analyzing CVEs: {e}"
+
+    def get_cve_details_panel(self, cve_analysis: str = None) -> Panel:
+        """Generate CVE details panel with agent-analyzed consolidated report.
+
+        Args:
+            cve_analysis: Agent-generated CVE analysis (if available)
+
+        Returns:
+            Rich Panel with CVE details (blue border, Next Steps style)
+        """
+        if not cve_analysis:
             return Panel(
-                "[dim]No critical/high CVEs found yet...[/dim]",
-                title="📋 CVE Report Details",
+                "[dim]CVE analysis not available yet...[/dim]",
+                title="🔍 Priority CVE Report",
                 border_style="blue"
             )
 
-        # Create formatted output
-        lines = []
-        for idx, cve in enumerate(all_cves, 1):
-            severity_color = "red" if cve.get("severity", "").lower() == "critical" else "yellow"
-            severity_icon = "🔴" if cve.get("severity", "").lower() == "critical" else "🟡"
-
-            lines.append(f"{idx}) {severity_icon} [{severity_color}bold]{cve['cve_id']}[/{severity_color}bold]")
-
-            if cve.get("package"):
-                lines.append(f"   [cyan]Package:[/cyan] {cve['package']}")
-            if cve.get("version"):
-                lines.append(f"   [cyan]Installed version:[/cyan] {cve['version']}")
-            if cve.get("severity"):
-                lines.append(f"   [cyan]Severity:[/cyan] [{severity_color}]{cve['severity']}[/{severity_color}]")
-            if cve.get("fixed_versions"):
-                lines.append(f"   [cyan]Fixed in:[/cyan] {cve['fixed_versions']}")
-            if cve.get("nvd_link"):
-                lines.append(f"   [cyan]NVD:[/cyan] [link={cve['nvd_link']}]{cve['nvd_link']}[/link]")
-
-            lines.append("")  # Empty line between CVEs
-
-        content = "\n".join(lines)
+        # Display agent analysis directly (it's already well-formatted)
         return Panel(
-            content,
-            title="📋 CVE Report Details",
-            border_style="red" if any(c.get("severity", "").lower() == "critical" for c in all_cves) else "yellow"
+            cve_analysis,
+            title="🔍 Priority CVE Report",
+            subtitle="Cross-service vulnerabilities listed first",
+            border_style="blue",
+            padding=(1, 2)
         )
 
     async def run(self) -> int:
@@ -682,37 +900,51 @@ Provide a concise summary with:
             # Run with Live display
             # Reduced refresh rate to minimize screen flicker (was 4)
             with Live(layout, console=console, refresh_per_second=2) as live:
-                for service in self.services:
-                    # Store full output for logs but don't display it
-                    self.full_output.append(f"Starting triage analysis for {service}...")
+                # Run services in parallel (max 2 at a time to avoid overwhelming display)
+                from asyncio import Semaphore, gather
 
-                    # Initial update
-                    layout["status"].update(self.tracker.get_table())
-                    layout["output"].update(self.get_output_panel())
-                    live.refresh()
+                # Limit concurrent scans to 2 (balance speed vs display clarity)
+                semaphore = Semaphore(2)
 
-                    # Run triage (async) - status updates happen inside run_triage_for_service
-                    response = await self.run_triage_for_service(service, layout, live)
+                async def run_with_limit(service, svc_idx):
+                    async with semaphore:
+                        self.full_output.append(f"Starting triage analysis for {service}...")
 
-                    # Store response for logs
-                    self.full_output.append(response)
+                        # Update display
+                        layout["output"].update(self.get_output_panel())
+                        layout["status"].update(self.tracker.get_table())
+                        live.refresh()
 
-                    # Update output panel after parsing
-                    layout["output"].update(self.get_output_panel())
-                    layout["status"].update(self.tracker.get_table())
-                    live.refresh()
+                        # Run triage for this service
+                        response = await self.run_triage_for_service(service, layout, live)
+
+                        # Store response for logs
+                        self.full_output.append(response)
+
+                        return response
+
+                # Launch all services in parallel (controlled by semaphore)
+                tasks = [run_with_limit(service, idx) for idx, service in enumerate(self.services, 1)]
+                responses = await gather(*tasks)
 
                 # Final update
+                layout["output"].update(self.get_output_panel())
+                layout["status"].update(self.tracker.get_table())
                 live.refresh()
 
             # Post-processing outside Live context
             console.print()
+            console.print("[green]✓ Scans complete for all services[/green]")
 
-            # Print CVE details panel first
-            console.print(self.get_cve_details_panel())
+            # Print security assessment panel first (grade report)
+            console.print(self.get_security_assessment_panel())
 
-            # Print remediation panel second
-            console.print(self.get_results_panel(0))
+            # Analyze CVEs with agent to create consolidated report
+            console.print("\n[cyan]Analyzing CVE findings to identify cross-service vulnerabilities...[/cyan]")
+            cve_analysis = await self._analyze_cves_with_agent()
+
+            # Print CVE details panel second (agent-generated consolidated report)
+            console.print(self.get_cve_details_panel(cve_analysis))
 
             # Save log
             self._save_log(0)
@@ -774,45 +1006,15 @@ Provide a concise summary with:
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 
     def get_results_panel(self, return_code: int) -> Panel:
-        """Generate final results panel with concise next steps.
+        """Generate final results panel (required by base class).
+
+        Note: TriageRunner uses async run() which calls get_security_assessment_panel()
+        directly, so this method is not actually used in normal execution.
 
         Args:
             return_code: Process return code
 
         Returns:
-            Rich Panel with next steps (matches status command format)
+            Rich Panel with security assessment
         """
-        summary = self.tracker.get_summary()
-        next_steps = []
-
-        # Critical vulnerabilities - highest priority
-        if summary["critical"] > 0:
-            next_steps.append(f"[red]🔴[/red] Patch {summary['critical']} critical CVE(s) immediately")
-
-        # High vulnerabilities - high priority
-        if summary["high"] > 0:
-            next_steps.append(f"[yellow]⚠[/yellow] Upgrade {summary['high']} high-severity package(s)")
-
-        # Medium vulnerabilities
-        if summary["medium"] > 0:
-            next_steps.append(f"[blue]📋[/blue] Schedule {summary['medium']} medium-severity update(s)")
-
-        # If clean scan
-        if summary["critical"] + summary["high"] + summary["medium"] == 0:
-            next_steps.append("[green]✓[/green] No vulnerabilities found - dependencies are clean")
-
-        # Issue tracking
-        if not self.create_issue and (summary["critical"] > 0 or summary["high"] > 0):
-            next_steps.append(f"[cyan]📝[/cyan] Run with --create-issue to generate GitHub issues")
-
-        # CI/CD integration
-        next_steps.append("[cyan]⚙️[/cyan] Integrate scanning into CI/CD pipeline")
-
-        content = "\n".join(next_steps)
-
-        return Panel(
-            content,
-            title="💡 Next Steps",
-            border_style="blue",
-            padding=(1, 2)
-        )
+        return self.get_security_assessment_panel()

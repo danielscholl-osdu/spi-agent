@@ -34,7 +34,7 @@ class BaseRunner(ABC):
         """
         self.prompt_file = prompt_file
         self.services = services
-        self.output_lines = deque(maxlen=50)  # Keep last 50 lines of output
+        self.output_lines = deque(maxlen=200)  # Keep last 200 lines (supports multi-service output)
         self.full_output = []  # Keep all output for logging
         self.tracker = None  # Must be set by subclass
 
