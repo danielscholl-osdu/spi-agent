@@ -131,6 +131,73 @@ class TriageRunner(BaseRunner):
                     critical=critical,
                 )
 
+    async def _monitor_maven_mcp_log(self, service: str, layout, live, stop_event: asyncio.Event):
+        """Monitor Maven MCP log file and display key events in output panel.
+
+        Args:
+            service: Service name being analyzed
+            layout: Rich layout object for display updates
+            live: Rich Live context for refreshing
+            stop_event: Event to signal when to stop monitoring
+        """
+        from spi_agent.copilot.config import log_dir
+
+        # Find the latest maven_mcp log file
+        maven_logs = sorted(log_dir.glob("maven_mcp_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not maven_logs:
+            return
+
+        log_file = maven_logs[0]
+        last_position = 0
+
+        # Track what we've already shown to avoid duplicates
+        shown_events = set()
+
+        while not stop_event.is_set():
+            try:
+                with open(log_file, 'r') as f:
+                    f.seek(last_position)
+                    new_lines = f.readlines()
+                    last_position = f.tell()
+
+                    for line in new_lines:
+                        line = line.strip()
+                        if not line or service not in line.lower():
+                            continue
+
+                        # Parse key events from Maven MCP log
+                        if "MCP call to scan_java_project" in line and "scan_java_project" not in shown_events:
+                            self.output_lines.append("   ↪ MCP tool: scan_java_project")
+                            shown_events.add("scan_java_project")
+                            layout["output"].update(self.get_output_panel())
+                            live.refresh()
+
+                        elif "Running Trivy command:" in line and "trivy_cmd" not in shown_events:
+                            # Extract the trivy command
+                            if "trivy fs" in line:
+                                self.output_lines.append("   ↪ Executing: trivy fs --security-checks vuln")
+                                shown_events.add("trivy_cmd")
+                                layout["output"].update(self.get_output_panel())
+                                live.refresh()
+
+                        elif "Found" in line and "vulnerabilities" in line and "found_vulns" not in shown_events:
+                            # Extract vulnerability counts from log
+                            # Format: "Found 161 vulnerabilities: {'critical': 4, 'high': 71, 'medium': 67, 'low': 19, 'unknown': 0}"
+                            import re
+                            match = re.search(r"Found (\d+) vulnerabilities:", line)
+                            if match:
+                                total = match.group(1)
+                                self.output_lines.append(f"   ↪ Scan complete: {total} vulnerabilities detected")
+                                shown_events.add("found_vulns")
+                                layout["output"].update(self.get_output_panel())
+                                live.refresh()
+
+                await asyncio.sleep(0.5)  # Check log every 500ms
+
+            except Exception:
+                # Log file might not exist yet or might be locked, continue
+                await asyncio.sleep(0.5)
+
     async def run_triage_for_service(self, service: str, layout, live) -> str:
         """Run triage analysis for a single service with live progress updates.
 
@@ -146,7 +213,12 @@ class TriageRunner(BaseRunner):
 
         # Update tracker
         self.tracker.update(service, "analyzing", "Starting triage analysis")
+
+        # Add to output panel (matches log format)
+        self.output_lines.append(f"Starting triage analysis for {service}...")
+
         layout["status"].update(self.tracker.get_table())
+        layout["output"].update(self.get_output_panel())
         live.refresh()
 
         # Construct very direct prompt to execute the scan tool immediately
@@ -175,15 +247,31 @@ class TriageRunner(BaseRunner):
         if self.create_issue:
             prompt += "\n- After the scan, create a GitHub tracking issue with the findings"
 
+        log_stop_event = None
+        log_monitor_task = None
+
         try:
             # Update status to scanning
             self.tracker.update(service, "scanning", "Running vulnerability scan...")
+
+            # Add scan initiation to output panel (status command style)
+            self.output_lines.append(f"✓ Scan Java project")
+            self.output_lines.append(f"   $ scan_java_project_tool workspace: ./repos/{service}")
+            self.output_lines.append(f"   ↪ Running Trivy security scan...")
+
             layout["status"].update(self.tracker.get_table())
+            layout["output"].update(self.get_output_panel())
             live.refresh()
 
             # Create a task for the agent call
             agent_task = asyncio.create_task(
                 self.agent.agent.run(prompt, thread=self.agent.agent.get_new_thread())
+            )
+
+            # Start monitoring Maven MCP log in parallel
+            log_stop_event = asyncio.Event()
+            log_monitor_task = asyncio.create_task(
+                self._monitor_maven_mcp_log(service, layout, live, log_stop_event)
             )
 
             # Show progress while waiting
@@ -205,13 +293,19 @@ class TriageRunner(BaseRunner):
                     ]
                     msg = status_messages[(elapsed // 2) % len(status_messages)]
 
+                    # Update tracker (status table shows progress with elapsed time)
                     self.tracker.update(service, "scanning", msg)
+
                     layout["status"].update(self.tracker.get_table())
                     live.refresh()
                     last_update = time.time()
 
             # Get the response
             response = await agent_task
+
+            # Stop log monitoring
+            log_stop_event.set()
+            await log_monitor_task
 
             # Update status to processing results
             self.tracker.update(service, "reporting", "Processing scan results...")
@@ -222,14 +316,35 @@ class TriageRunner(BaseRunner):
             response_str = str(response)
             self.parse_agent_response(service, response_str)
 
-            # Update CVE details panel
-            layout["output"].update(self.get_cve_details_panel())
+            # Add scan completion message with results (status command style)
+            svc_data = self.tracker.services[service]
+            total_vulns = svc_data['critical'] + svc_data['high'] + svc_data['medium']
+            self.output_lines.append(f"   ↪ Found {total_vulns} vulnerabilities (critical: {svc_data['critical']}, high: {svc_data['high']}, medium: {svc_data['medium']})")
+
+            # Show agent response in output panel (first 30 lines)
+            response_lines = response_str.split('\n')
+            for line in response_lines[:30]:
+                if line.strip():  # Skip empty lines
+                    self.output_lines.append(line)
+
+            # Also store in full_output for logs
+            for line in response_lines:
+                if line.strip():
+                    self.full_output.append(line)
+
+            # Update display with agent response
+            layout["output"].update(self.get_output_panel())
             layout["status"].update(self.tracker.get_table())
             live.refresh()
 
             return response_str
 
         except Exception as e:
+            # Stop log monitoring if it was started
+            if log_stop_event and log_monitor_task:
+                log_stop_event.set()
+                await log_monitor_task
+
             self.tracker.update(service, "error", f"Failed: {str(e)[:50]}")
             layout["status"].update(self.tracker.get_table())
             live.refresh()
@@ -550,7 +665,7 @@ class TriageRunner(BaseRunner):
         # Create layout
         layout = self.create_layout()
         layout["status"].update(self.tracker.get_table())
-        layout["output"].update(self.get_cve_details_panel())
+        layout["output"].update(self.get_output_panel())
 
         try:
             # Run with Live display
@@ -562,7 +677,7 @@ class TriageRunner(BaseRunner):
 
                     # Initial update
                     layout["status"].update(self.tracker.get_table())
-                    layout["output"].update(self.get_cve_details_panel())
+                    layout["output"].update(self.get_output_panel())
                     live.refresh()
 
                     # Run triage (async) - status updates happen inside run_triage_for_service
@@ -571,8 +686,8 @@ class TriageRunner(BaseRunner):
                     # Store response for logs
                     self.full_output.append(response)
 
-                    # Update CVE details panel after parsing
-                    layout["output"].update(self.get_cve_details_panel())
+                    # Update output panel after parsing
+                    layout["output"].update(self.get_output_panel())
                     layout["status"].update(self.tracker.get_table())
                     live.refresh()
 
@@ -582,7 +697,10 @@ class TriageRunner(BaseRunner):
             # Post-processing outside Live context
             console.print()
 
-            # Print results panel
+            # Print CVE details panel first
+            console.print(self.get_cve_details_panel())
+
+            # Print remediation panel second
             console.print(self.get_results_panel(0))
 
             # Save log
@@ -645,68 +763,76 @@ class TriageRunner(BaseRunner):
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 
     def get_results_panel(self, return_code: int) -> Panel:
-        """Generate final results panel with remediation recommendations.
+        """Generate final results panel with concise next steps.
 
         Args:
             return_code: Process return code
 
         Returns:
-            Rich Panel with remediation recommendations
+            Rich Panel with next steps
         """
         summary = self.tracker.get_summary()
 
         # Build header with summary
         lines = []
-        lines.append(f"[bold]Triage Complete[/bold] - {summary['total_services']} service(s) scanned")
+        lines.append(f"[bold]Scan Complete[/bold] - {summary['total_services']} service(s) analyzed")
         lines.append("")
         lines.append(f"[red]● Critical:[/red] {summary['critical']}  [yellow]● High:[/yellow] {summary['high']}  [blue]● Medium:[/blue] {summary['medium']}")
         lines.append("")
 
-        # Collect remediation from all services
-        all_remediation = []
-        for service, data in self.tracker.services.items():
-            remediation = data.get("remediation", "")
-            if remediation:
-                all_remediation.append(remediation)
+        # Build concise, actionable next steps
+        lines.append("[bold cyan]Next Steps:[/bold cyan]")
+        lines.append("")
 
-        if all_remediation:
-            lines.append("[bold cyan]Remediation Recommendations:[/bold cyan]")
-            lines.append("")
-            # Use the first service's remediation (they're usually similar)
-            lines.append(all_remediation[0])
-        else:
-            # Fallback if no remediation was parsed
-            lines.append("[bold cyan]Recommended Next Steps:[/bold cyan]")
-            lines.append("")
-            if summary["critical"] > 0:
-                lines.append("1. [red]Prioritize immediate patching for all Critical findings[/red]")
-                lines.append("   - Review CVE details above for specific packages and fix versions")
-                lines.append("   - Plan for compatibility testing and run full test suite")
-                lines.append("")
-            if summary["high"] > 0:
-                lines.append("2. [yellow]Address High-severity vulnerabilities[/yellow]")
-                lines.append("   - Upgrade dependencies to recommended fixed versions")
-                lines.append("   - Consider using dependencyManagement to override transitive versions")
-                lines.append("")
-            if summary["medium"] > 0:
-                lines.append("3. [blue]Plan updates for Medium-severity issues[/blue]")
-                lines.append("   - Schedule upgrades in upcoming sprints")
-                lines.append("")
+        step_num = 1
 
-            lines.append("4. Implement CI/CD best practices")
-            lines.append("   - Run vulnerability scans in CI pipeline")
-            lines.append("   - Create tracking issues for findings (use --create-issue flag)")
-            lines.append("   - Re-scan after each batch of upgrades")
+        # Critical vulnerabilities - highest priority
+        if summary["critical"] > 0:
+            lines.append(f"{step_num}. [red bold]Patch critical vulnerabilities immediately[/red bold]")
+            lines.append(f"   Review {summary['critical']} critical CVE(s) above and upgrade affected packages")
+            step_num += 1
+            lines.append("")
+
+        # High vulnerabilities - high priority
+        if summary["high"] > 0:
+            lines.append(f"{step_num}. [yellow bold]Address high-severity issues[/yellow bold]")
+            lines.append(f"   Upgrade {summary['high']} high-priority package(s) to fixed versions")
+            step_num += 1
+            lines.append("")
+
+        # Medium vulnerabilities
+        if summary["medium"] > 0:
+            lines.append(f"{step_num}. [blue bold]Plan medium-severity updates[/blue bold]")
+            lines.append(f"   Schedule {summary['medium']} package upgrade(s) in upcoming sprint")
+            step_num += 1
+            lines.append("")
+
+        # CI/CD integration
+        lines.append(f"{step_num}. [cyan bold]Integrate into CI/CD pipeline[/cyan bold]")
+        lines.append("   Add vulnerability scanning to prevent regression")
+        step_num += 1
+        lines.append("")
+
+        # Issue tracking
+        if not self.create_issue and summary["critical"] + summary["high"] > 0:
+            lines.append(f"{step_num}. [cyan bold]Create tracking issues[/cyan bold]")
+            lines.append("   Run with [cyan]--create-issue[/cyan] to generate GitHub issues")
+            step_num += 1
+            lines.append("")
+
+        # Re-scan
+        lines.append(f"{step_num}. [green bold]Verify fixes[/green bold]")
+        lines.append("   Re-run triage after upgrades to confirm vulnerabilities resolved")
 
         content = "\n".join(lines)
 
         # Determine panel style based on severity
         border_style = "red" if summary["critical"] > 0 else "yellow" if summary["high"] > 0 else "green"
-        title_emoji = "🔴" if summary["critical"] > 0 else "🟡" if summary["high"] > 0 else "✓"
+        title_emoji = "🔴" if summary["critical"] > 0 else "🟡" if summary["high"] > 0 else "✅"
 
         return Panel(
             content,
-            title=f"{title_emoji} Remediation Plan",
+            title=f"{title_emoji} Next Steps",
             border_style=border_style,
             padding=(1, 2)
         )

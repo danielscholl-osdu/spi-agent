@@ -106,15 +106,26 @@ class BaseRunner(ABC):
             # Join lines and create text
             output_text = Text()
             for line in self.output_lines:
+                line_lower = line.lower()
+
                 # Add color coding for common patterns
                 if line.startswith("$"):
                     output_text.append(line + "\n", style="cyan")
-                elif line.startswith("✓") or "success" in line.lower():
+                elif line.startswith("✓") or "success" in line_lower:
                     output_text.append(line + "\n", style="green")
-                elif line.startswith("✗") or "error" in line.lower() or "failed" in line.lower():
+                elif line.startswith("✗") or "error" in line_lower or "failed" in line_lower:
                     output_text.append(line + "\n", style="red")
                 elif line.startswith("●"):
                     output_text.append(line + "\n", style="yellow")
+                # Highlight tool executions
+                elif "executed:" in line_lower or "_tool" in line_lower:
+                    output_text.append(line + "\n", style="cyan bold")
+                # Highlight summaries and scan results
+                elif "summary" in line_lower or "scan result" in line_lower:
+                    output_text.append(line + "\n", style="yellow bold")
+                # Highlight starting messages
+                elif "starting" in line_lower and "analysis" in line_lower:
+                    output_text.append(line + "\n", style="cyan")
                 else:
                     output_text.append(line + "\n", style="white")
 

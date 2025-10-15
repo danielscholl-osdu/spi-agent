@@ -273,7 +273,7 @@ class TestTriageRunner:
 
         # Panel should have green border (clean)
         assert panel.border_style == "green"
-        assert "✓" in panel.title
+        assert "✅" in panel.title
 
     def test_log_file_naming(self, mock_prompt_file, mock_agent):
         """Test log file naming with multiple services."""
