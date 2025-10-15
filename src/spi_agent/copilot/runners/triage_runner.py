@@ -226,10 +226,10 @@ class TriageRunner(BaseRunner):
         live.refresh()
 
         # Construct very direct prompt to execute the scan tool immediately
-        # Format profiles and severity as Python lists for the agent framework
-        import json
-        profiles_list = json.dumps(self.maven_profiles)
-        severity_list = json.dumps([s.upper() for s in self.severity_filter])
+        # Note: include_profiles and severity_filter will be supported in future MCP server versions
+        # For now, we scan everything and filter results by severity afterward
+        severity_str = ', '.join([s.upper() for s in self.severity_filter])
+        profiles_str = ', '.join(self.maven_profiles)
 
         prompt = f"""Execute a complete Maven dependency and vulnerability triage for the {service} service.
 
@@ -237,14 +237,16 @@ class TriageRunner(BaseRunner):
 
 Call scan_java_project_tool with these exact parameters:
 - workspace: ./repos/{service}
-- include_profiles: {profiles_list}
-- severity_filter: {severity_list}
 - max_results: 100
 
+After the scan completes, filter the results to show ONLY vulnerabilities with severity: {severity_str}.
+
 Provide a concise summary with:
-- Total vulnerabilities found (count by severity: Critical, High, Medium)
+- Total vulnerabilities found (count by severity: Critical, High, Medium) - ONLY for {severity_str} severities
 - Top 5 critical/high findings with CVE IDs, CVSS scores, affected packages
 - Recommended remediation steps
+
+**NOTE**: This scan will use the default Maven configuration. In a future version, it will activate Maven profiles: {profiles_str}
 
 **DO NOT:**
 - Ask me which option to choose
