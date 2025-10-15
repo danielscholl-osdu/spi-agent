@@ -226,22 +226,25 @@ class TriageRunner(BaseRunner):
         live.refresh()
 
         # Construct very direct prompt to execute the scan tool immediately
-        severity_str = ','.join(self.severity_filter).upper()
-        profiles_str = ','.join(self.maven_profiles)
+        # Format profiles and severity as Python lists for the agent framework
+        import json
+        profiles_list = json.dumps(self.maven_profiles)
+        severity_list = json.dumps([s.upper() for s in self.severity_filter])
+
         prompt = f"""Execute a complete Maven dependency and vulnerability triage for the {service} service.
 
 **ACTION REQUIRED - DO NOT ASK FOR CONFIRMATION:**
-1. Run scan_java_project_tool with these exact parameters:
-   - workspace: ./repos/{service}
-   - scan_mode: workspace
-   - profiles: {profiles_str}
-   - severity_filter: {severity_str}
-   - max_results: 100
 
-2. After the scan completes, provide a concise summary with:
-   - Total vulnerabilities found (count by severity: Critical, High, Medium)
-   - Top 5 critical/high findings with CVE IDs, CVSS scores, affected packages
-   - Recommended remediation steps
+Call scan_java_project_tool with these exact parameters:
+- workspace: ./repos/{service}
+- include_profiles: {profiles_list}
+- severity_filter: {severity_list}
+- max_results: 100
+
+Provide a concise summary with:
+- Total vulnerabilities found (count by severity: Critical, High, Medium)
+- Top 5 critical/high findings with CVE IDs, CVSS scores, affected packages
+- Recommended remediation steps
 
 **DO NOT:**
 - Ask me which option to choose
