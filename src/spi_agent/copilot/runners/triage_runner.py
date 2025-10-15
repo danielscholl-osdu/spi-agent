@@ -780,70 +780,39 @@ Provide a concise summary with:
             return_code: Process return code
 
         Returns:
-            Rich Panel with next steps
+            Rich Panel with next steps (matches status command format)
         """
         summary = self.tracker.get_summary()
-
-        # Build header with summary
-        lines = []
-        lines.append(f"[bold]Scan Complete[/bold] - {summary['total_services']} service(s) analyzed")
-        lines.append("")
-        lines.append(f"[red]● Critical:[/red] {summary['critical']}  [yellow]● High:[/yellow] {summary['high']}  [blue]● Medium:[/blue] {summary['medium']}")
-        lines.append("")
-
-        # Build concise, actionable next steps
-        lines.append("[bold cyan]Next Steps:[/bold cyan]")
-        lines.append("")
-
-        step_num = 1
+        next_steps = []
 
         # Critical vulnerabilities - highest priority
         if summary["critical"] > 0:
-            lines.append(f"{step_num}. [red bold]Patch critical vulnerabilities immediately[/red bold]")
-            lines.append(f"   Review {summary['critical']} critical CVE(s) above and upgrade affected packages")
-            step_num += 1
-            lines.append("")
+            next_steps.append(f"[red]🔴[/red] Patch {summary['critical']} critical CVE(s) immediately")
 
         # High vulnerabilities - high priority
         if summary["high"] > 0:
-            lines.append(f"{step_num}. [yellow bold]Address high-severity issues[/yellow bold]")
-            lines.append(f"   Upgrade {summary['high']} high-priority package(s) to fixed versions")
-            step_num += 1
-            lines.append("")
+            next_steps.append(f"[yellow]⚠[/yellow] Upgrade {summary['high']} high-severity package(s)")
 
         # Medium vulnerabilities
         if summary["medium"] > 0:
-            lines.append(f"{step_num}. [blue bold]Plan medium-severity updates[/blue bold]")
-            lines.append(f"   Schedule {summary['medium']} package upgrade(s) in upcoming sprint")
-            step_num += 1
-            lines.append("")
+            next_steps.append(f"[blue]📋[/blue] Schedule {summary['medium']} medium-severity update(s)")
 
-        # CI/CD integration
-        lines.append(f"{step_num}. [cyan bold]Integrate into CI/CD pipeline[/cyan bold]")
-        lines.append("   Add vulnerability scanning to prevent regression")
-        step_num += 1
-        lines.append("")
+        # If clean scan
+        if summary["critical"] + summary["high"] + summary["medium"] == 0:
+            next_steps.append("[green]✓[/green] No vulnerabilities found - dependencies are clean")
 
         # Issue tracking
-        if not self.create_issue and summary["critical"] + summary["high"] > 0:
-            lines.append(f"{step_num}. [cyan bold]Create tracking issues[/cyan bold]")
-            lines.append("   Run with [cyan]--create-issue[/cyan] to generate GitHub issues")
-            step_num += 1
-            lines.append("")
+        if not self.create_issue and (summary["critical"] > 0 or summary["high"] > 0):
+            next_steps.append(f"[cyan]📝[/cyan] Run with --create-issue to generate GitHub issues")
 
-        # Re-scan
-        lines.append(f"{step_num}. [green bold]Verify fixes[/green bold]")
-        lines.append("   Re-run triage after upgrades to confirm vulnerabilities resolved")
+        # CI/CD integration
+        next_steps.append("[cyan]⚙️[/cyan] Integrate scanning into CI/CD pipeline")
 
-        content = "\n".join(lines)
-
-        # Determine panel style based on severity
-        border_style = "red" if summary["critical"] > 0 else "yellow" if summary["high"] > 0 else "green"
-        title_emoji = "🔴" if summary["critical"] > 0 else "🟡" if summary["high"] > 0 else "✅"
+        content = "\n".join(next_steps)
 
         return Panel(
             content,
-            title=f"{title_emoji} Next Steps",
-            border_style=border_style,
+            title="💡 Next Steps",
+            border_style="blue",
             padding=(1, 2)
         )

@@ -248,9 +248,9 @@ class TestTriageRunner:
 
         panel = runner.get_results_panel(0)
 
-        # Panel should have red border due to critical vulns
-        assert panel.border_style == "red"
-        assert "🔴" in panel.title  # Critical indicator
+        # Panel should have blue border to match status command format
+        assert panel.border_style == "blue"
+        assert panel.title == "💡 Next Steps"
 
     def test_get_results_panel_high_only(self, mock_prompt_file, mock_agent):
         """Test results panel with only high severity vulns."""
@@ -260,9 +260,9 @@ class TestTriageRunner:
 
         panel = runner.get_results_panel(0)
 
-        # Panel should have yellow border (high but no critical)
-        assert panel.border_style == "yellow"
-        assert "🟡" in panel.title
+        # Panel should have blue border to match status command format
+        assert panel.border_style == "blue"
+        assert panel.title == "💡 Next Steps"
 
     def test_get_results_panel_clean(self, mock_prompt_file, mock_agent):
         """Test results panel with no vulnerabilities."""
@@ -272,9 +272,9 @@ class TestTriageRunner:
 
         panel = runner.get_results_panel(0)
 
-        # Panel should have green border (clean)
-        assert panel.border_style == "green"
-        assert "✅" in panel.title
+        # Panel should have blue border to match status command format
+        assert panel.border_style == "blue"
+        assert panel.title == "💡 Next Steps"
 
     def test_log_file_naming(self, mock_prompt_file, mock_agent):
         """Test log file naming with multiple services."""
