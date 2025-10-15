@@ -30,6 +30,7 @@ class TriageRunner(BaseRunner):
         agent: "SPIAgent",
         create_issue: bool = False,
         severity_filter: Optional[List[str]] = None,
+        maven_profiles: Optional[List[str]] = None,
     ):
         """Initialize triage runner.
 
@@ -39,11 +40,13 @@ class TriageRunner(BaseRunner):
             agent: SPIAgent instance with MCP tools
             create_issue: Whether to create tracking issues for findings
             severity_filter: List of severity levels to include (critical, high, medium)
+            maven_profiles: Maven profiles to activate during scan (default: azure)
         """
         super().__init__(prompt_file, services)
         self.agent = agent
         self.create_issue = create_issue
         self.severity_filter = severity_filter or ["critical", "high", "medium"]
+        self.maven_profiles = maven_profiles or ["azure"]
         self.tracker = TriageTracker(services)
 
     @property
@@ -69,6 +72,7 @@ class TriageRunner(BaseRunner):
         """Display run configuration"""
         config_text = f"""[cyan]Services:[/cyan]     {', '.join(self.services)}
 [cyan]Severity:[/cyan]     {', '.join(self.severity_filter).upper()}
+[cyan]Maven Profile:[/cyan] {', '.join(self.maven_profiles)}
 [cyan]Create Issue:[/cyan] {'Yes' if self.create_issue else 'No'}"""
 
         console.print(Panel(config_text, title="🔍 Maven Triage Analysis", border_style="blue"))
@@ -223,12 +227,14 @@ class TriageRunner(BaseRunner):
 
         # Construct very direct prompt to execute the scan tool immediately
         severity_str = ','.join(self.severity_filter).upper()
+        profiles_str = ','.join(self.maven_profiles)
         prompt = f"""Execute a complete Maven dependency and vulnerability triage for the {service} service.
 
 **ACTION REQUIRED - DO NOT ASK FOR CONFIRMATION:**
 1. Run scan_java_project_tool with these exact parameters:
    - workspace: ./repos/{service}
    - scan_mode: workspace
+   - profiles: {profiles_str}
    - severity_filter: {severity_str}
    - max_results: 100
 

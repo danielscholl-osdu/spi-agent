@@ -167,7 +167,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "triage":
         if len(parts) < 2:
-            return "Usage: /triage <services> [--create-issue] [--severity critical,high,medium]\nExample: /triage partition"
+            return "Usage: /triage <services> [--create-issue] [--severity critical,high,medium] [--profile azure]\nExample: /triage partition"
 
         services_arg = parts[1]
         create_issue = "--create-issue" in parts
@@ -179,6 +179,14 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             if severity_idx + 1 < len(parts):
                 severity_arg = parts[severity_idx + 1]
                 severity_filter = [s.strip().lower() for s in severity_arg.split(",")]
+
+        # Parse --profile flag
+        maven_profiles = ["azure"]  # Default
+        if "--profile" in parts:
+            profile_idx = parts.index("--profile")
+            if profile_idx + 1 < len(parts):
+                profile_arg = parts[profile_idx + 1]
+                maven_profiles = [p.strip() for p in profile_arg.split(",")]
 
         try:
             prompt_file = copilot_module.get_prompt_file("triage.md")
@@ -193,7 +201,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         severity_str = ", ".join(severity_filter).upper()
         console.print(f"\n[yellow]Running triage analysis for: {', '.join(services)} (severity: {severity_str})[/yellow]\n")
 
-        runner = copilot_module.TriageRunner(prompt_file, services, agent, create_issue, severity_filter)
+        runner = copilot_module.TriageRunner(prompt_file, services, agent, create_issue, severity_filter, maven_profiles)
         exit_code = await runner.run()
 
         if exit_code == 0:
@@ -476,6 +484,11 @@ Examples:
             default="critical,high,medium",
             help="Severity filter: critical, high, medium, low (default: critical,high,medium)",
         )
+        triage_parser.add_argument(
+            "--profile",
+            default="azure",
+            help="Maven profile(s) to activate: azure, aws, gc, ibm, or comma-separated list (default: azure)",
+        )
 
     parser.add_argument(
         "-p",
@@ -589,6 +602,9 @@ async def async_main(args: Optional[list[str]] = None) -> int:
         # Parse severity filter
         severity_filter = [s.strip().lower() for s in parsed.severity.split(",")]
 
+        # Parse maven profiles
+        maven_profiles = [p.strip() for p in parsed.profile.split(",")]
+
         # Create agent with MCP tools for triage
         config = AgentConfig()
         maven_mcp = MavenMCPManager(config)
@@ -607,6 +623,7 @@ async def async_main(args: Optional[list[str]] = None) -> int:
                 agent,
                 parsed.create_issue,
                 severity_filter,
+                maven_profiles,
             )
             return await runner.run()
 

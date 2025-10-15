@@ -175,6 +175,7 @@ class TestTriageRunner:
 
         assert runner.create_issue is False
         assert runner.severity_filter == ["critical", "high", "medium"]
+        assert runner.maven_profiles == ["azure"]
 
     def test_load_prompt(self, mock_prompt_file, mock_agent):
         """Test prompt loading and augmentation."""
