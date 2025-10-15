@@ -256,7 +256,6 @@ Provide a concise summary with:
             # Add simple completion message
             total_vulns = svc_data['critical'] + svc_data['high'] + svc_data['medium']
             self.output_lines.append(f"✓ Analysis complete for {service}")
-            self.output_lines.append("")  # Add blank line between services
 
             # Also store in full_output for logs
             self.full_output.append(f"=== {service.upper()} SCAN RESULTS ===")
@@ -692,7 +691,7 @@ Provide a concise summary with:
         # Create table
         table = Table(show_header=True, header_style="bold", box=None)
         table.add_column("Service", style="cyan", width=12)
-        table.add_column("Result", style="white", width=25)
+        table.add_column("Result", style="white", width=40)
         table.add_column("Grade", justify="center", width=7)
         table.add_column("Recommendation", style="white")
 
@@ -734,9 +733,9 @@ Provide a concise summary with:
                 "F": "red bold"
             }.get(svc_grade, "white")
 
-            # Result text with breakdown
+            # Result text with breakdown (concise format: just counts)
             if total == 0:
-                result_text = Text("Passed (0 vulnerabilities)", style="green")
+                result_text = Text("0C, 0H, 0M", style="green")
             else:
                 result_parts = []
                 if critical > 0:
@@ -746,7 +745,7 @@ Provide a concise summary with:
                 if medium > 0:
                     result_parts.append(f"{medium}M")
 
-                result_str = f"Found {total} issues ({', '.join(result_parts)})"
+                result_str = ', '.join(result_parts)
                 if critical > 0:
                     result_text = Text(result_str, style="red")
                 elif high > 0:
@@ -927,23 +926,31 @@ Provide a concise summary with:
                 tasks = [run_with_limit(service, idx) for idx, service in enumerate(self.services, 1)]
                 responses = await gather(*tasks)
 
-                # Final update
+                # Add scan completion message to output panel
+                self.output_lines.append("")
+                self.output_lines.append("✓ Scans complete for all services")
+                self.output_lines.append("")
                 layout["output"].update(self.get_output_panel())
                 layout["status"].update(self.tracker.get_table())
                 live.refresh()
 
+                # Add CVE analysis message to output panel
+                self.output_lines.append("Analyzing CVE findings to identify cross-service vulnerabilities...")
+                layout["output"].update(self.get_output_panel())
+                live.refresh()
+
+                # Analyze CVEs with agent (while still in Live context so output shows progress)
+                cve_analysis = await self._analyze_cves_with_agent()
+
+                # Add completion message to output panel
+                self.output_lines.append("✓ CVE analysis complete")
+                layout["output"].update(self.get_output_panel())
+                live.refresh()
+
             # Post-processing outside Live context
+            # Display both panels together
             console.print()
-            console.print("[green]✓ Scans complete for all services[/green]")
-
-            # Print security assessment panel first (grade report)
             console.print(self.get_security_assessment_panel())
-
-            # Analyze CVEs with agent to create consolidated report
-            console.print("\n[cyan]Analyzing CVE findings to identify cross-service vulnerabilities...[/cyan]")
-            cve_analysis = await self._analyze_cves_with_agent()
-
-            # Print CVE details panel second (agent-generated consolidated report)
             console.print(self.get_cve_details_panel(cve_analysis))
 
             # Save log
