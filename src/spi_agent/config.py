@@ -55,12 +55,14 @@ class AgentConfig:
         default_factory=lambda: os.getenv("AZURE_OPENAI_API_KEY")
     )
 
-    # Internal Maven MCP configuration (not user-configurable)
+    # Internal Maven MCP configuration
     maven_mcp_command: str = "uvx"
     maven_mcp_args: List[str] = field(
         default_factory=lambda: [
             "--quiet",  # Suppress uvx output
-            "mvn-mcp-server",
+            # Pin to specific version for reproducibility
+            # Can override via MAVEN_MCP_VERSION env var (e.g., "mvn-mcp-server==2.3.0")
+            os.getenv("MAVEN_MCP_VERSION", "mvn-mcp-server==2.2.1"),
             # Note: stderr is redirected to logs/maven_mcp_*.log by QuietMCPStdioTool
         ]
     )

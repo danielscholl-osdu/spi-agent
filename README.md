@@ -66,197 +66,100 @@ Agent: -- Maven test results --
 
 
 
-## Install & Configure
+## Install
 
-### 1. Install the package
-
-**Recommended: Global Tool Installation**
+Install `spi-agent` globally using `uv`:
 
 ```bash
+# Install from GitHub
 uv tool install --prerelease=allow git+https://github.com/danielscholl-osdu/spi-agent.git
-```
-This installs `spi-agent` globally with isolated dependencies. You can then use `spi-agent` from anywhere.
-
-**Tool Management Commands**
-```bash
-# List installed tools
-uv tool list
 
 # Upgrade to latest version
 uv tool upgrade spi-agent
-
-# Uninstall cleanly
-uv tool uninstall spi-agent
-
-# Reinstall (useful for troubleshooting)
-uv tool uninstall spi-agent && uv tool install --prerelease=allow git+https://github.com/danielscholl-osdu/spi-agent.git
 ```
 
-**For Development: Clone and install locally**
+The agent requires environment variables for Azure OpenAI access. Configure these in your system's environment:
+
+**Required Environment Variables:**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `AZURE_OPENAI_ENDPOINT` | Your Azure OpenAI resource URL | `https://my-resource.cognitiveservices.azure.com/` |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name | `gpt-4o-mini` |
+| `AZURE_OPENAI_VERSION` | API version | `2025-03-01-preview` |
+| `AZURE_OPENAI_API_KEY` | API key (falls back to `az login` if not set) | `your_api_key` |
+
+**Optional Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SPI_AGENT_ORGANIZATION` | `danielscholl-osdu` | GitHub organization to manage |
+| `SPI_AGENT_REPOSITORIES` | `partition,legal,entitlements,schema,file,storage` | Comma-separated repository list |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | *(none)* | Azure Application Insights for observability |
+| `MAVEN_MCP_VERSION` | `mvn-mcp-server==2.2.1` | Override Maven MCP Server version |
+
+**Platform-specific setup:**
+
+```bash
+# macOS/Linux - Add to shell profile (~/.zshrc, ~/.bashrc, ~/.zshenv)
+export AZURE_OPENAI_ENDPOINT="https://..."
+export AZURE_OPENAI_API_KEY="your_api_key"
+
+# Windows PowerShell - Add to profile ($PROFILE)
+$env:AZURE_OPENAI_ENDPOINT="https://..."
+$env:AZURE_OPENAI_API_KEY="your_api_key"
+
+# Windows CMD - Set system environment variables via GUI or:
+setx AZURE_OPENAI_ENDPOINT "https://..."
+setx AZURE_OPENAI_API_KEY "your_api_key"
+```
+
+
+## Usage
+
+Start the interactive chat interface:
+
+```bash
+spi-agent
+```
+
+The agent provides conversational access to GitHub operations and Maven dependency management. Use natural language to manage issues, pull requests, workflows, and security scanning across your OSDU SPI repositories.
+
+**Maven dependency scanning** is automatically available via the [Maven MCP Server](https://github.com/danielscholl/mvn-mcp-server) (v2.2.1, auto-installed). For security vulnerability scanning, install [Trivy](https://trivy.dev) (optional).
+
+For command-line options:
+```bash
+spi-agent --help
+```
+
+
+## Development & Testing
+
+For local development and testing, clone the repository and install in editable mode:
 
 ```bash
 # Clone the repository
 git clone https://github.com/danielscholl-osdu/spi-agent.git
 cd spi-agent
 
-# Option 1: Install as global tool (recommended)
-uv tool install --prerelease=allow -e ".[dev]"
-```
-
-> **Note:** The package depends on `agent-framework>=1.0.0b251001`; `--prerelease=allow` ensures that build is selected.
-
-### 2. Configure credentials
-
-Copy `.env.example` to `.env` (or add to your shell profile) and fill in the values:
-
-```bash
+# Configure environment variables (optional - uses shell profile by default)
 cp .env.example .env
-```
+# Edit .env with your values if preferred over shell profile
 
-The agent prefers environment variables, but will fall back to `az login` if no `AZURE_OPENAI_API_KEY` is present.
-
-
-## Usage
-
-### Basic Commands
-
-**Interactive Chat Mode** (default)
-```bash
-spi-agent
-```
-Start a conversation with your repositories. Best for exploratory work and follow-up questions.
-
-**Help**
-```bash
-spi-agent --help
-```
-
-### Maven Test Automation
-
-Run Maven builds, tests, and coverage reports for OSDU SPI services:
-
-**Interactive Chat Mode (Slash Command):**
-```bash
-/test partition                           # Default: Azure provider
-/test partition --provider aws            # Specific provider
-/test partition,legal                     # Multiple services
-/test partition --provider azure,aws      # Multiple providers
-```
-
-**CLI Command:**
-```bash
-# Basic usage
-spi-agent test --services partition                    # Default: Azure provider
-spi-agent test --services partition --provider aws     # Specific provider
-spi-agent test --services partition,legal,schema       # Multiple services
-spi-agent test --services all --provider core          # All services, core profile
-
-# Options
-spi-agent test --services partition --compile-only     # Compile only, skip tests
-spi-agent test --services partition --skip-coverage    # Skip coverage report
-```
-
-**Options:**
-- `--services` / `-s`: Service name(s) - 'all', single, or comma-separated
-- `--provider` / `-p`: Cloud provider(s) - azure, aws, gc, ibm, core, all (default: azure)
-- `--compile-only`: Only compile, skip test execution and coverage
-- `--skip-coverage`: Skip coverage report generation
-
-**Prerequisites:**
-- Repositories must be cloned first using `/fork` or `spi-agent fork` command
-- Maven 3.6+ must be installed and available in PATH
-- Java 17+ required
-
-**Output:**
-- Real-time status updates for each service (compile, test, coverage phases)
-- Test results with pass/fail counts
-- Code coverage percentages (line and branch coverage)
-- Detailed logs saved to `logs/test_*.log`
-
-**Example Output:**
-```
-Service         Phase      Status            Tests            Coverage
-partition       test       TEST SUCCESS      42 passed        78%/65%
-legal           compile    COMPILE SUCCESS   -                -
-schema          coverage   TEST SUCCESS      38 passed        82%/70%
-```
-
-
-## Configuration
-
-### Required Environment Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `AZURE_OPENAI_ENDPOINT` | Your Azure OpenAI resource URL | `https://my-resource.cognitiveservices.azure.com/` |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` | Model deployment name | `gpt-5-mini` |
-| `AZURE_OPENAI_VERSION` | API version | `2025-03-01-preview` |
-| `AZURE_OPENAI_API_KEY` | API key | `your_api_key` |
-
-### Optional Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SPI_AGENT_ORGANIZATION` | `danielscholl-osdu` | GitHub organization |
-| `SPI_AGENT_REPOSITORIES` | `partition,legal,entitlements,schema,file,storage` | Comma-separated repo list |
-
-### Maven MCP Integration
-
-Maven dependency management and security scanning is automatically available via the [Maven MCP Server](https://github.com/danielscholl/mvn-mcp-server). This provides:
-
-**Capabilities:**
-- Check dependency versions and discover updates (major/minor/patch)
-- Scan Java projects for security vulnerabilities using Trivy
-- Analyze POM files for dependency issues
-- Run comprehensive triage analysis with CVE detection
-- Generate actionable remediation plans
-
-**Setup:**
-```bash
-# Install Trivy for security scanning (optional but recommended)
-brew install trivy  # macOS
-# See https://trivy.dev for other platforms
-
-# The Maven MCP server will be auto-installed via uvx on first use
-```
-
-**Workspace Layout:**
-- Local repositories live under `./repos/<service>` (for example `./repos/partition`).
-- Always pass these concrete paths (absolute or `./repos/<service>`) when invoking Maven MCP tools so the server can locate the workspace.
-
-**Example Workflows:**
-```bash
-# Check dependency versions
-You: "Check if spring-core 5.3.0 has any updates available"
-Agent: spring-core 5.3.0 → 6.1.0 available (major update)
-
-# Security scanning
-You: "Scan partition service for vulnerabilities"
-Agent: Found 2 critical CVEs in partition/pom.xml:
-       🔴 CVE-2023-XXXXX (CVSS 9.8) in spring-core 5.3.0
-
-# Integrated workflow: scan → create issues
-You: "Run triage for partition and create issues for critical CVEs"
-Agent: 1. Scanning partition/pom.xml...
-       2. Found 2 critical, 5 high severity issues
-       3. Created issue #15: [SECURITY] CVE-2023-XXXXX in spring-core
-       4. Created issue #16: [SECURITY] CVE-2023-YYYYY in commons-io
-```
-
-**Requirements:**
-- Maven MCP Server is installed automatically via `uvx mvn-mcp-server`
-- Trivy is optional but required for security vulnerability scanning
-- Without Trivy, version checking and dependency analysis still work
-
-## Testing
-
-```bash
-# Install dev dependencies
+# Install in editable mode with dev dependencies
 uv pip install -e ".[dev]" --prerelease=allow
 
 # Run tests
-pytest
+uv run pytest
+
+# Run with coverage report
+uv run pytest --cov=src/spi_agent --cov-report=term-missing
+
+# Run specific test file
+uv run pytest tests/test_agent.py -v
 ```
+
+**Note:** The `.env` file is provided for convenience during development. The agent still reads from `os.getenv()`, so ensure your shell environment variables are set or use a tool like `python-dotenv` if needed.
 
 ## Documentation
 

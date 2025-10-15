@@ -82,17 +82,16 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
         console.print(f"\n[yellow]Executing fork workflow for: {', '.join(services)}[/yellow]\n")
 
-        runner = copilot_module.CopilotRunner(prompt_file, services, branch)
-        exit_code = runner.run()
+        # Use workflow function to store results for agent context
+        from spi_agent.workflows.triage_workflow import run_fork_workflow
 
-        if exit_code == 0:
-            summary = f"Successfully forked repositories: {', '.join(services)} (branch: {branch})"
-        else:
-            summary = f"Fork command failed with exit code {exit_code} for services: {', '.join(services)}"
+        result = await run_fork_workflow(services=services, branch=branch)
 
+        # Brief acknowledgment - agent will have access to full results via context injection
         await agent.agent.run(
-            f"SYSTEM NOTE: The user just ran a fork command. {summary}. "
-            f"Acknowledge this briefly and offer to help with next steps.",
+            f"The fork workflow just completed for {', '.join(services)} (branch: {branch}). "
+            f"You now have access to the fork operation results. "
+            f"Acknowledge briefly and offer to help with next steps.",
             thread=thread,
         )
         return None
@@ -114,13 +113,16 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
         console.print(f"\n[yellow]Checking status for: {', '.join(services)}[/yellow]\n")
 
-        runner = copilot_module.StatusRunner(prompt_file, services)
-        runner.run()
+        # Use workflow function to store results for agent context
+        from spi_agent.workflows.triage_workflow import run_status_workflow
 
-        summary = f"Status check completed for: {', '.join(services)}"
+        result = await run_status_workflow(services=services)
+
+        # Brief acknowledgment - agent will have access to full results via context injection
         await agent.agent.run(
-            f"SYSTEM NOTE: The user just checked GitHub status. {summary}. "
-            f"The status information was displayed. Acknowledge briefly and offer to help analyze the results.",
+            f"The status check just completed for {', '.join(services)}. "
+            f"You now have access to the status information. "
+            f"Acknowledge briefly and offer to help analyze the results.",
             thread=thread,
         )
         return None
@@ -150,17 +152,16 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
         console.print(f"\n[yellow]Running Maven tests for: {', '.join(services)} (provider: {provider})[/yellow]\n")
 
-        runner = copilot_module.TestRunner(prompt_file, services, provider)
-        exit_code = runner.run()
+        # Use workflow function to store results for agent context
+        from spi_agent.workflows.triage_workflow import run_test_workflow
 
-        if exit_code == 0:
-            summary = f"Maven tests completed for: {', '.join(services)}"
-        else:
-            summary = f"Maven test command failed with exit code {exit_code} for services: {', '.join(services)}"
+        result = await run_test_workflow(services=services, provider=provider)
 
+        # Brief acknowledgment - agent will have access to full results via context injection
         await agent.agent.run(
-            f"SYSTEM NOTE: The user just ran Maven tests. {summary}. "
-            f"Acknowledge this briefly and offer to help analyze the results or fix any issues.",
+            f"The test workflow just completed for {', '.join(services)}. "
+            f"You now have access to the test results. "
+            f"Acknowledge briefly and offer to help analyze the results or fix any issues.",
             thread=thread,
         )
         return None
@@ -201,19 +202,32 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         severity_str = ", ".join(severity_filter).upper()
         console.print(f"\n[yellow]Running triage analysis for: {', '.join(services)} (severity: {severity_str})[/yellow]\n")
 
-        runner = copilot_module.TriageRunner(prompt_file, services, agent, create_issue, severity_filter, maven_profiles)
-        exit_code = await runner.run()
+        # Use workflow function to store results for agent context
+        from spi_agent.workflows.triage_workflow import run_triage_workflow
 
-        if exit_code == 0:
-            summary = f"Triage analysis completed for: {', '.join(services)}"
-        else:
-            summary = f"Triage command failed with exit code {exit_code} for services: {', '.join(services)}"
+        try:
+            result = await run_triage_workflow(
+                agent=agent,
+                services=services,
+                severity_filter=severity_filter,
+                maven_profiles=maven_profiles,
+                create_issue=create_issue,
+            )
 
-        await agent.agent.run(
-            f"SYSTEM NOTE: The user just ran triage analysis. {summary}. "
-            f"Acknowledge this briefly and offer to help with next steps like creating tracking issues or running plans.",
-            thread=thread,
-        )
+            # Brief acknowledgment - agent will have access to full results via context injection
+            await agent.agent.run(
+                f"The triage workflow just completed for {', '.join(services)}. "
+                f"You now have access to the full results including vulnerability counts and CVE analysis. "
+                f"Acknowledge briefly and offer to help analyze the findings.",
+                thread=thread,
+            )
+        except Exception as e:
+            await agent.agent.run(
+                f"The triage workflow encountered an error: {str(e)}. "
+                f"Acknowledge this and offer to help troubleshoot.",
+                thread=thread,
+            )
+
         return None
 
     return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /triage, /help"

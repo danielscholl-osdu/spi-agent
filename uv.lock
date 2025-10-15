@@ -29,7 +29,7 @@ wheels = [
 
 [[package]]
 name = "agent-framework"
-version = "1.0.0b251001"
+version = "1.0.0b251007"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-framework-a2a" },
@@ -40,9 +40,9 @@ dependencies = [
     { name = "agent-framework-mem0" },
     { name = "agent-framework-redis" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/80/37/fb42aab11a488e67ad1b58a4551644153889ad0a7ee3929f8ffbe10d6833/agent_framework-1.0.0b251001.tar.gz", hash = "sha256:d150f22c8b6fb7b9b809b871a87dad568ab8921f9f2eba151bbf59a801dd2664", size = 1612913, upload-time = "2025-10-01T14:02:13.144Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/a6/d21b9666b738b7398ab1b58c31fcd17f0b4da04e822f261b097058451ee5/agent_framework-1.0.0b251007.tar.gz", hash = "sha256:c17e1286471d22f60304a36a03e38f87bf7a720dee6fce5c35bc738eb5227abc", size = 1689664, upload-time = "2025-10-07T21:54:55.549Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/bd/6d876c84ed90d2421a33cc43ab0eae94b6e50d6b1b5f5290f96ba44d4824/agent_framework-1.0.0b251001-py3-none-any.whl", hash = "sha256:17b75e752b5638c1513a57e88bd960559ec9bc32d45743b970b10108cd8ff3ce", size = 5508, upload-time = "2025-10-01T14:02:11.31Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/aa/7c4b12e59040d2cb7c4d19d34ceb0de2a126c9850d954d08cc02acb760d4/agent_framework-1.0.0b251007-py3-none-any.whl", hash = "sha256:c582b2f7d1659cc5c543c6a6e90cfd05c87547b0dadbce38cd46aa75f883474f", size = 5551, upload-time = "2025-10-07T21:54:53.43Z" },
 ]
 
 [[package]]
@@ -3000,7 +3000,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-framework", specifier = ">=1.0.0b251001" },
+    { name = "agent-framework", specifier = ">=1.0.0b251007" },
     { name = "azure-identity", specifier = ">=1.25.1" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=25.9.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.2" },

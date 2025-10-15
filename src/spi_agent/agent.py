@@ -8,6 +8,11 @@ from azure.identity import AzureCliCredential
 
 from spi_agent.config import AgentConfig
 from spi_agent.github import create_github_tools
+from spi_agent.middleware import (
+    logging_chat_middleware,
+    logging_function_middleware,
+    workflow_context_agent_middleware,
+)
 
 
 class SPIAgent:
@@ -162,13 +167,20 @@ WORKSPACE LAYOUT:
         # Combine GitHub tools with MCP tools if available
         all_tools = self.github_tools + self.mcp_tools
 
-        # Create agent with all available tools
+        # Create agent with all available tools and middleware
         # Note: Thread-based memory is built-in - agent remembers within a session
+        # Middleware levels:
+        # - Agent middleware: Intercepts agent.run() calls (workflow context injection)
+        # - Function middleware: Intercepts tool calls (logging)
+        # - Chat middleware: Intercepts LLM calls (logging)
         self.agent = ChatAgent(
             chat_client=chat_client,
             instructions=self.instructions,
             tools=all_tools,
             name="SPI GitHub Issues Agent",
+            middleware=[workflow_context_agent_middleware],  # Agent-level middleware
+            function_middleware=[logging_function_middleware],
+            chat_middleware=[logging_chat_middleware],
         )
 
     async def run(self, query: str) -> str:

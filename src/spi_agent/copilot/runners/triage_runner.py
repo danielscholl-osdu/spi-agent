@@ -929,13 +929,12 @@ Provide a concise summary with:
                 # Add scan completion message to output panel
                 self.output_lines.append("")
                 self.output_lines.append("✓ Scans complete for all services")
-                self.output_lines.append("")
                 layout["output"].update(self.get_output_panel())
                 layout["status"].update(self.tracker.get_table())
                 live.refresh()
 
                 # Add CVE analysis message to output panel
-                self.output_lines.append("Analyzing CVE findings to identify cross-service vulnerabilities...")
+                self.output_lines.append(f"   ↪ Analyzing CVE findings...")
                 layout["output"].update(self.get_output_panel())
                 live.refresh()
 
