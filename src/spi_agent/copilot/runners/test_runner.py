@@ -28,15 +28,48 @@ class TestRunner(BaseRunner):
     ):
         super().__init__(prompt_file, services)
         self.provider = provider
-        self.tracker = TestTracker(services, provider)
+
+        # Parse provider into profiles list
+        self.profiles = self._parse_provider_to_profiles(provider)
+
+        # Create tracker with profiles if multiple specified
+        self.tracker = TestTracker(services, provider, profiles=self.profiles if len(self.profiles) > 1 else [])
 
         # Initialize logger for coverage extraction debugging
-        self.logger = logging.getLogger(__name__)
+        # Configure to write only to log file, not console
+        self.logger = logging.getLogger(f"{__name__}.{id(self)}")  # Unique logger per instance
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False  # Prevent propagation to root logger (blocks console output)
+
+        # Add file handler
+        file_handler = logging.FileHandler(self.log_file)
+        file_handler.setFormatter(
+            logging.Formatter('[%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s] %(message)s')
+        )
+        self.logger.addHandler(file_handler)
 
     @property
     def log_prefix(self) -> str:
         """Return log file prefix for this runner type."""
         return "test"
+
+    def _parse_provider_to_profiles(self, provider: str) -> List[str]:
+        """Parse provider string into list of profiles.
+
+        Args:
+            provider: Provider string (e.g., "azure", "azure,aws", "all")
+
+        Returns:
+            List of profile names
+        """
+        if provider == "all":
+            return ["core", "core-plus", "azure", "aws", "gc", "ibm"]
+        elif "," in provider:
+            # Multiple providers specified
+            return [p.strip() for p in provider.split(",")]
+        else:
+            # Single provider
+            return [provider]
 
     def load_prompt(self) -> str:
         """Load and augment prompt with arguments"""
@@ -53,7 +86,12 @@ class TestRunner(BaseRunner):
 
     def show_config(self):
         """Display run configuration"""
-        config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
+        if len(self.profiles) > 1:
+            profiles_str = ', '.join(self.profiles)
+            config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
+[cyan]Profiles:[/cyan]   {profiles_str}"""
+        else:
+            config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
 [cyan]Provider:[/cyan]   {self.provider}"""
 
         console.print(Panel(config_text, title="🧪 Maven Test Execution", border_style="blue"))
@@ -216,12 +254,17 @@ class TestRunner(BaseRunner):
         finally:
             current_process = None
 
-    def _extract_coverage_from_csv(self, service: str, base_path: Path) -> tuple[float, float]:
+    def _extract_coverage_from_csv(self, service: str, base_path: Path, profile: str = None) -> tuple[float, float]:
         """
         Extract coverage data from JaCoCo CSV reports.
 
         CSV format is stable and reliable across JaCoCo versions.
         Returns (line_coverage_percent, branch_coverage_percent).
+
+        Args:
+            service: Service name
+            base_path: Base path to search for coverage reports
+            profile: Optional profile name to filter coverage by module
         """
         # Search for jacoco.csv in multiple locations
         csv_paths = [
@@ -253,12 +296,13 @@ class TestRunner(BaseRunner):
                 continue
 
             try:
-                self.logger.debug(f"[{service}] Found CSV report: {csv_path}")
+                profile_prefix = f"[{service}:{profile}] " if profile else f"[{service}] "
+                self.logger.debug(f"{profile_prefix}Found CSV report: {csv_path}")
                 content = csv_path.read_text(encoding='utf-8')
                 lines = content.strip().split('\n')
 
                 if len(lines) < 2:
-                    self.logger.debug(f"[{service}] CSV file is empty or has no data rows")
+                    self.logger.debug(f"{profile_prefix}CSV file is empty or has no data rows")
                     continue
 
                 # Skip header row, parse data rows
@@ -268,8 +312,38 @@ class TestRunner(BaseRunner):
 
                     parts = line.split(',')
                     if len(parts) < 9:
-                        self.logger.debug(f"[{service}] Skipping malformed CSV row {i}: insufficient columns")
+                        self.logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}: insufficient columns")
                         continue
+
+                    # If profile filtering is enabled, check if this row matches the profile
+                    if profile:
+                        # CSV columns: GROUP,PACKAGE,CLASS,...
+                        group = parts[0].lower()
+                        package = parts[1].lower()
+
+                        # Profile matching logic:
+                        # - Check if group or package contains profile name
+                        # - Examples: "partition-azure", "partition.azure", "provider.partition-azure"
+                        # - Also handle: "core", "core-plus"
+                        profile_normalized = profile.lower().replace("-", "")
+                        module_path = f"{group}.{package}"
+
+                        # Check for profile match
+                        if profile == "core-plus":
+                            # Special handling for core-plus
+                            if "coreplus" not in module_path and "core-plus" not in module_path:
+                                continue
+                        elif profile == "core":
+                            # Core should not match core-plus
+                            if "coreplus" in module_path or "core-plus" in module_path:
+                                continue
+                            # Must have "core" but not as part of "coreplus"
+                            if "core" not in module_path:
+                                continue
+                        else:
+                            # Regular profile matching
+                            if profile_normalized not in module_path.replace("-", ""):
+                                continue
 
                     try:
                         # CSV columns: GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,
@@ -285,14 +359,14 @@ class TestRunner(BaseRunner):
                         total_branch_missed += branch_missed
 
                     except (ValueError, IndexError) as e:
-                        self.logger.debug(f"[{service}] Skipping malformed CSV row {i}: {e}")
+                        self.logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}: {e}")
                         continue
 
                 files_parsed += 1
-                self.logger.debug(f"[{service}] Parsed CSV with totals - Lines: {total_line_covered}/{total_line_missed}, Branches: {total_branch_covered}/{total_branch_missed}")
+                self.logger.debug(f"{profile_prefix}Parsed CSV with totals - Lines: {total_line_covered}/{total_line_missed}, Branches: {total_branch_covered}/{total_branch_missed}")
 
             except Exception as e:
-                self.logger.debug(f"[{service}] Failed to parse CSV at {csv_path}: {e}")
+                self.logger.debug(f"{profile_prefix}Failed to parse CSV at {csv_path}: {e}")
                 continue
 
         # Calculate percentages
@@ -305,10 +379,11 @@ class TestRunner(BaseRunner):
         if total_branch_covered + total_branch_missed > 0:
             branch_cov = (total_branch_covered / (total_branch_covered + total_branch_missed)) * 100
 
+        profile_prefix = f"[{service}:{profile}] " if profile else f"[{service}] "
         if files_parsed > 0:
-            self.logger.debug(f"[{service}] CSV parsing succeeded: {line_cov:.1f}% line, {branch_cov:.1f}% branch coverage")
+            self.logger.debug(f"{profile_prefix}CSV parsing succeeded: {line_cov:.1f}% line, {branch_cov:.1f}% branch coverage")
         else:
-            self.logger.debug(f"[{service}] No CSV files found or parsed")
+            self.logger.debug(f"{profile_prefix}No CSV files found or parsed")
 
         return (line_cov, branch_cov)
 
@@ -388,24 +463,53 @@ class TestRunner(BaseRunner):
         Extract coverage data from JaCoCo reports (post-processing).
 
         Prioritizes CSV parsing (stable, reliable) with HTML fallback (deprecated).
+        If multiple profiles specified, extracts coverage for each profile separately.
         """
         for service in self.services:
-            if self.tracker.services[service]["coverage_line"] > 0:
-                continue  # Already have coverage data
-
             # Look for JaCoCo report in multiple possible locations
             search_paths = [
                 Path.cwd() / "repos" / service,
                 Path.cwd() / service,
             ]
 
-            coverage_found = False
-            for base_path in search_paths:
-                if not base_path.exists():
-                    self.logger.debug(f"[{service}] Path does not exist: {base_path}")
-                    continue
+            # Find valid base path
+            base_path = None
+            for path in search_paths:
+                if path.exists():
+                    base_path = path
+                    break
 
-                self.logger.debug(f"[{service}] Searching for coverage reports in: {base_path}")
+            if not base_path:
+                self.logger.warning(f"[{service}] No valid path found for coverage extraction")
+                continue
+
+            self.logger.debug(f"[{service}] Searching for coverage reports in: {base_path}")
+
+            if len(self.profiles) > 1:
+                # Multi-profile mode: extract coverage for each profile
+                for profile in self.profiles:
+                    line_cov, branch_cov = self._extract_coverage_from_csv(service, base_path, profile=profile)
+
+                    if line_cov > 0 or branch_cov > 0:
+                        self.logger.info(f"[{service}:{profile}] CSV parsing succeeded: {line_cov:.1f}% line, {branch_cov:.1f}% branch")
+                        self.tracker.update(
+                            service,
+                            "test_success",
+                            f"Coverage: {int(line_cov)}%/{int(branch_cov)}%",
+                            profile=profile,
+                            coverage_line=int(line_cov),
+                            coverage_branch=int(branch_cov),
+                        )
+                    else:
+                        self.logger.warning(f"[{service}:{profile}] No coverage data found for profile")
+
+                # Aggregate profile data to service level
+                self.tracker._aggregate_profile_data(service)
+
+            else:
+                # Single-profile mode (original behavior)
+                if self.tracker.services[service]["coverage_line"] > 0:
+                    continue  # Already have coverage data
 
                 # PRIORITY 1: Try CSV extraction (stable, reliable)
                 line_cov, branch_cov = self._extract_coverage_from_csv(service, base_path)
@@ -420,117 +524,283 @@ class TestRunner(BaseRunner):
                         coverage_line=int(line_cov),
                         coverage_branch=int(branch_cov),
                     )
-                    coverage_found = True
-                    break
-
-                # PRIORITY 2: Fallback to HTML parsing (deprecated, fragile)
-                self.logger.warning(f"[{service}] CSV parsing returned 0% coverage, falling back to HTML parsing (deprecated)")
-                line_cov_html, branch_cov_html = self._extract_coverage_from_html(service, base_path)
-
-                if line_cov_html > 0 or branch_cov_html > 0:
-                    self.logger.warning(f"[{service}] HTML parsing succeeded (deprecated): {line_cov_html}% line, {branch_cov_html}% branch")
-                    self.tracker.update(
-                        service,
-                        self.tracker.services[service]["status"],  # Keep current status
-                        f"Coverage: {line_cov_html}%/{branch_cov_html}%",
-                        phase="coverage",
-                        coverage_line=line_cov_html,
-                        coverage_branch=branch_cov_html,
-                    )
-                    coverage_found = True
-                    break
                 else:
-                    self.logger.warning(f"[{service}] Both CSV and HTML parsing failed to extract coverage")
+                    # PRIORITY 2: Fallback to HTML parsing (deprecated, fragile)
+                    self.logger.warning(f"[{service}] CSV parsing returned 0% coverage, falling back to HTML parsing (deprecated)")
+                    line_cov_html, branch_cov_html = self._extract_coverage_from_html(service, base_path)
 
-                if coverage_found:
-                    break
+                    if line_cov_html > 0 or branch_cov_html > 0:
+                        self.logger.warning(f"[{service}] HTML parsing succeeded (deprecated): {line_cov_html}% line, {branch_cov_html}% branch")
+                        self.tracker.update(
+                            service,
+                            self.tracker.services[service]["status"],  # Keep current status
+                            f"Coverage: {line_cov_html}%/{branch_cov_html}%",
+                            phase="coverage",
+                            coverage_line=line_cov_html,
+                            coverage_branch=branch_cov_html,
+                        )
+                    else:
+                        self.logger.warning(f"[{service}] Both CSV and HTML parsing failed to extract coverage")
 
-            if not coverage_found:
-                self.logger.warning(f"[{service}] No coverage data found in any location")
+    def _assess_profile_coverage(self, line_cov: int, branch_cov: int, profile: str = None) -> tuple:
+        """Assess coverage quality for a profile or service.
+
+        Args:
+            line_cov: Line coverage percentage
+            branch_cov: Branch coverage percentage
+            profile: Profile name (for profile-specific recommendations)
+
+        Returns:
+            Tuple of (grade, label, recommendations)
+        """
+        # Determine quality grade
+        if line_cov >= 90 and branch_cov >= 85:
+            grade = "A"
+            label = "Excellent"
+        elif line_cov >= 80 and branch_cov >= 70:
+            grade = "B"
+            label = "Good"
+        elif line_cov >= 70 and branch_cov >= 60:
+            grade = "C"
+            label = "Acceptable"
+        elif line_cov >= 60 and branch_cov >= 50:
+            grade = "D"
+            label = "Needs Improvement"
+        elif line_cov == 0 and branch_cov == 0:
+            grade = "F"
+            label = "No Coverage"
+        else:
+            grade = "F"
+            label = "Poor"
+
+        # Generate recommendations
+        recommendations = []
+        profile_context = f" in {profile}" if profile else ""
+
+        if line_cov == 0 and branch_cov == 0:
+            recommendations.append({
+                "priority": 1,
+                "action": f"Ensure JaCoCo is configured for {profile} module" if profile else "Ensure JaCoCo Maven plugin is configured in pom.xml",
+                "expected_improvement": "Enable coverage reporting"
+            })
+            recommendations.append({
+                "priority": 2,
+                "action": f"Verify tests are being executed during Maven build{profile_context}",
+                "expected_improvement": "Generate coverage data"
+            })
+        else:
+            if branch_cov < line_cov - 15:
+                recommendations.append({
+                    "priority": 1,
+                    "action": f"Improve branch coverage by testing edge cases{profile_context}",
+                    "expected_improvement": f"+{min(10, line_cov - branch_cov)}% branch coverage"
+                })
+
+            if line_cov < 80:
+                recommendations.append({
+                    "priority": 1 if not recommendations else 2,
+                    "action": f"Add unit tests for uncovered methods and classes{profile_context}",
+                    "expected_improvement": f"+{min(15, 80 - line_cov)}% line coverage"
+                })
+
+            if line_cov >= 80 and branch_cov < 80:
+                recommendations.append({
+                    "priority": len(recommendations) + 1,
+                    "action": f"Focus on testing complex conditional logic{profile_context}",
+                    "expected_improvement": "Better branch coverage"
+                })
+
+            if grade in ["A", "B"] and len(recommendations) == 0:
+                recommendations.append({
+                    "priority": 1,
+                    "action": f"Maintain current coverage levels with new code{profile_context}",
+                    "expected_improvement": "Sustained quality"
+                })
+
+        return (grade, label, recommendations[:3])
 
     def _assess_coverage_quality(self):
         """Assess coverage quality based on coverage metrics."""
         for service in self.services:
-            line_cov = self.tracker.services[service]["coverage_line"]
-            branch_cov = self.tracker.services[service]["coverage_branch"]
+            if len(self.profiles) > 1:
+                # Multi-profile mode: assess each profile individually
+                for profile in self.profiles:
+                    profile_data = self.tracker.services[service]["profiles"][profile]
+                    line_cov = profile_data.get("coverage_line", 0)
+                    branch_cov = profile_data.get("coverage_branch", 0)
 
-            # Determine quality grade
-            if line_cov >= 90 and branch_cov >= 85:
-                grade = "A"
-                label = "Excellent"
-                summary = "Outstanding test coverage with all critical paths well-tested."
-            elif line_cov >= 80 and branch_cov >= 70:
-                grade = "B"
-                label = "Good"
-                summary = "Good test coverage with most critical paths tested."
-            elif line_cov >= 70 and branch_cov >= 60:
-                grade = "C"
-                label = "Acceptable"
-                summary = "Acceptable coverage but room for improvement."
-            elif line_cov >= 60 and branch_cov >= 50:
-                grade = "D"
-                label = "Needs Improvement"
-                summary = "Coverage is below recommended levels. Consider adding more tests."
-            elif line_cov == 0 and branch_cov == 0:
-                # Special case: No coverage detected at all
-                grade = "F"
-                label = "No Coverage"
-                summary = "No coverage data detected. Ensure JaCoCo plugin is properly configured."
+                    grade, label, recommendations = self._assess_profile_coverage(line_cov, branch_cov, profile=profile)
+
+                    # Update profile data
+                    self.tracker.update(
+                        service,
+                        "test_success",
+                        f"Grade {grade}: {label}",
+                        profile=profile,
+                        quality_grade=grade,
+                        quality_label=label,
+                        recommendations=recommendations,
+                    )
+
+                # Re-aggregate after assessment
+                self.tracker._aggregate_profile_data(service)
+
+                # Set service-level summary
+                worst_grade = self.tracker.services[service].get("quality_grade", "F")
+                self.tracker.services[service]["quality_summary"] = f"Profile grades vary - worst: {worst_grade}"
+
             else:
-                grade = "F"
-                label = "Poor"
-                summary = "Critical gaps in test coverage. Immediate attention needed."
+                # Single-profile mode (original behavior)
+                line_cov = self.tracker.services[service]["coverage_line"]
+                branch_cov = self.tracker.services[service]["coverage_branch"]
 
-            # Generate recommendations based on coverage levels
-            recommendations = []
+                grade, label, recommendations = self._assess_profile_coverage(line_cov, branch_cov)
 
-            # Special recommendations for zero coverage
-            if line_cov == 0 and branch_cov == 0:
-                recommendations.append({
-                    "priority": 1,
-                    "action": "Ensure JaCoCo Maven plugin is configured in pom.xml",
-                    "expected_improvement": "Enable coverage reporting"
-                })
-                recommendations.append({
-                    "priority": 2,
-                    "action": "Verify tests are being executed during Maven build",
-                    "expected_improvement": "Generate coverage data"
-                })
+                # Store assessment results
+                self.tracker.services[service]["quality_grade"] = grade
+                self.tracker.services[service]["quality_label"] = label
+
+                # Set quality summary based on grade
+                if line_cov == 0 and branch_cov == 0:
+                    summary = "No coverage data detected. Ensure JaCoCo plugin is properly configured."
+                elif grade == "A":
+                    summary = "Outstanding test coverage with all critical paths well-tested."
+                elif grade == "B":
+                    summary = "Good test coverage with most critical paths tested."
+                elif grade == "C":
+                    summary = "Acceptable coverage but room for improvement."
+                elif grade == "D":
+                    summary = "Coverage is below recommended levels. Consider adding more tests."
+                else:
+                    summary = "Critical gaps in test coverage. Immediate attention needed."
+
+                self.tracker.services[service]["quality_summary"] = summary
+                self.tracker.services[service]["recommendations"] = recommendations
+
+    def get_profile_breakdown_panel(self) -> Panel:
+        """Generate profile breakdown panel with hierarchical display.
+
+        Returns:
+            Rich Panel with hierarchical table showing service (total) and profile rows
+        """
+        from rich.table import Table
+        from rich.text import Text
+
+        # Create table
+        table = Table(show_header=True, header_style="bold", box=None, expand=True)
+        table.add_column("Service", style="cyan", width=25)
+        table.add_column("Provider", style="blue", width=15)
+        table.add_column("Result", style="white", width=20)
+        table.add_column("Grade", justify="center", width=7)
+        table.add_column("Recommendation", style="white")
+
+        # Track overall worst grade for border color
+        worst_grade_value = 6
+        grade_values = {"A": 5, "B": 4, "C": 3, "D": 2, "F": 1}
+
+        for service, data in self.tracker.services.items():
+            # Get service-level metrics
+            svc_line_cov = data["coverage_line"]
+            svc_branch_cov = data["coverage_branch"]
+            svc_grade = data.get("quality_grade")
+
+            if svc_grade and grade_values.get(svc_grade, 0) < worst_grade_value:
+                worst_grade_value = grade_values[svc_grade]
+
+            # Determine service-level result
+            if data["status"] == "test_failed":
+                result_text = Text(f"Failed ({data['tests_failed']}/{data['tests_run']} tests)", style="red")
+                svc_grade_text = Text("—", style="dim")
+                svc_rec = "Fix test failures"
+            elif data["status"] == "compile_failed":
+                result_text = Text("Compile Failed", style="red")
+                svc_grade_text = Text("—", style="dim")
+                svc_rec = "Fix compilation errors"
+            elif svc_grade:
+                result_text = Text(f"Cov: {svc_line_cov}%/{svc_branch_cov}%",
+                                 style="green" if svc_grade in ["A", "B"] else "yellow" if svc_grade == "C" else "red")
+                grade_style = {"A": "green bold", "B": "blue bold", "C": "yellow bold",
+                              "D": "red bold", "F": "red bold"}.get(svc_grade, "white")
+                svc_grade_text = Text(svc_grade, style=grade_style)
+                svc_rec = data.get("quality_label", "")
             else:
-                # Normal recommendations for non-zero coverage
-                if branch_cov < line_cov - 15:
-                    recommendations.append({
-                        "priority": 1,
-                        "action": "Improve branch coverage by testing edge cases and conditions",
-                        "expected_improvement": f"+{min(10, line_cov - branch_cov)}% branch coverage"
-                    })
+                result_text = Text("Pending", style="dim")
+                svc_grade_text = Text("—", style="dim")
+                svc_rec = ""
 
-                if line_cov < 80:
-                    recommendations.append({
-                        "priority": 1 if not recommendations else 2,
-                        "action": "Add unit tests for uncovered methods and classes",
-                        "expected_improvement": f"+{min(15, 80 - line_cov)}% line coverage"
-                    })
+            # Add service (total) row
+            table.add_row(
+                f"[bold]{service} (total)[/bold]",
+                "",  # No provider for total row
+                result_text,
+                svc_grade_text,
+                svc_rec
+            )
 
-                if line_cov >= 80 and branch_cov < 80:
-                    recommendations.append({
-                        "priority": len(recommendations) + 1,
-                        "action": "Focus on testing complex conditional logic",
-                        "expected_improvement": "Better branch coverage"
-                    })
+            # Add profile rows
+            profiles = data.get("profiles", {})
+            if profiles:
+                # Show profiles in standard order
+                profile_order = ["core", "core-plus", "azure", "aws", "gc", "ibm", "testing"]
+                for profile_name in profile_order:
+                    if profile_name not in profiles:
+                        continue
 
-                if grade in ["A", "B"] and len(recommendations) == 0:
-                    recommendations.append({
-                        "priority": 1,
-                        "action": "Maintain current coverage levels with new code",
-                        "expected_improvement": "Sustained quality"
-                    })
+                    profile_data = profiles[profile_name]
+                    p_line_cov = profile_data.get("coverage_line", 0)
+                    p_branch_cov = profile_data.get("coverage_branch", 0)
+                    p_grade = profile_data.get("quality_grade")
 
-            # Store assessment results
-            self.tracker.services[service]["quality_grade"] = grade
-            self.tracker.services[service]["quality_label"] = label
-            self.tracker.services[service]["quality_summary"] = summary
-            self.tracker.services[service]["recommendations"] = recommendations[:3]  # Top 3 only
+                    # Track worst grade
+                    if p_grade and grade_values.get(p_grade, 0) < worst_grade_value:
+                        worst_grade_value = grade_values[p_grade]
+
+                    # Format profile result
+                    if p_grade:
+                        p_result = Text(f"Cov: {p_line_cov}%/{p_branch_cov}%",
+                                      style="green" if p_grade in ["A", "B"] else "yellow" if p_grade == "C" else "dim")
+                        p_grade_style = {"A": "green", "B": "blue", "C": "yellow",
+                                        "D": "red", "F": "red"}.get(p_grade, "white")
+                        p_grade_text = Text(p_grade, style=p_grade_style)
+
+                        # Get first recommendation
+                        p_recs = profile_data.get("recommendations", [])
+                        if p_recs:
+                            p_rec = p_recs[0].get("action", "")
+                            if len(p_rec) > 50:
+                                p_rec = p_rec[:47] + "..."
+                        else:
+                            p_rec = profile_data.get("quality_label", "")
+                    else:
+                        p_result = Text("No data", style="dim")
+                        p_grade_text = Text("—", style="dim")
+                        p_rec = ""
+
+                    table.add_row(
+                        f"  ↳ {profile_name}",
+                        profile_name.capitalize(),
+                        p_result,
+                        p_grade_text,
+                        p_rec
+                    )
+
+        # Determine border color based on worst grade
+        border_color_map = {5: "green", 4: "blue", 3: "yellow", 2: "red", 1: "red"}
+        border_color = border_color_map.get(worst_grade_value, "cyan")
+
+        # Subtitle showing profile count
+        if self.profiles:
+            subtitle = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''} × {len(self.profiles)} profiles"
+        else:
+            subtitle = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''}"
+
+        return Panel(
+            table,
+            title="📊 Test Results",
+            subtitle=subtitle,
+            border_style=border_color,
+            padding=(1, 2)
+        )
 
     def get_quality_panel(self) -> Panel:
         """Generate quality assessment panel with clean columnar layout"""
@@ -556,12 +826,13 @@ class TestRunner(BaseRunner):
                 result = f"Failed ({data['tests_failed']}/{data['tests_run']} tests)"
                 result_style = "red"
             elif data["status"] == "test_success":
-                # Prioritize coverage display when available (basis for grade)
-                if data.get("coverage_line", 0) > 0 or data.get("coverage_branch", 0) > 0:
+                # Show coverage if we have a quality grade (even if 0%)
+                # This ensures consistent display and explains the grade
+                if data.get("quality_grade"):
                     result = f"Cov: {data['coverage_line']}%/{data['coverage_branch']}%"
                     result_style = "green"
                 elif data["tests_run"] > 0:
-                    # Fallback to test count if no coverage data
+                    # Fallback to test count only if no grade assigned
                     result = f"Passed ({data['tests_run']} tests)"
                     result_style = "green"
                 else:
@@ -656,6 +927,30 @@ class TestRunner(BaseRunner):
                                 if rec.get("expected_improvement"):
                                     f.write(f" ({rec['expected_improvement']})")
                                 f.write("\n")
+
+                    # Add profile breakdown if multiple profiles
+                    profiles = data.get("profiles", {})
+                    if profiles:
+                        f.write("\n  Profile Breakdown:\n")
+                        for profile_name in ["core", "core-plus", "azure", "aws", "gc", "ibm", "testing"]:
+                            if profile_name not in profiles:
+                                continue
+                            profile_data = profiles[profile_name]
+                            f.write(f"    {profile_name}:\n")
+                            f.write(f"      Tests Run: {profile_data.get('tests_run', 0)}\n")
+                            f.write(f"      Tests Failed: {profile_data.get('tests_failed', 0)}\n")
+                            f.write(f"      Coverage Line: {profile_data.get('coverage_line', 0)}%\n")
+                            f.write(f"      Coverage Branch: {profile_data.get('coverage_branch', 0)}%\n")
+                            if profile_data.get("quality_grade"):
+                                f.write(f"      Quality Grade: {profile_data['quality_grade']} - {profile_data.get('quality_label', 'N/A')}\n")
+                                if profile_data.get("recommendations"):
+                                    f.write("      Recommendations:\n")
+                                    for rec in profile_data["recommendations"][:3]:
+                                        f.write(f"        - {rec.get('action', 'N/A')}")
+                                        if rec.get("expected_improvement"):
+                                            f.write(f" ({rec['expected_improvement']})")
+                                        f.write("\n")
+
                     f.write("\n")
 
                 f.write("\n=== FULL OUTPUT ===\n\n")
@@ -666,8 +961,19 @@ class TestRunner(BaseRunner):
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 
     def get_results_panel(self, return_code: int) -> Panel:
-        """Generate final results panel - uses the same clean table format as quality panel"""
-        # Simply return the quality panel which already has the clean columnar layout
-        return self.get_quality_panel()
+        """Generate final results panel.
+
+        Args:
+            return_code: Process return code
+
+        Returns:
+            Rich Panel with test results (hierarchical if multiple profiles, flat otherwise)
+        """
+        # If multiple profiles, use hierarchical breakdown panel
+        if len(self.profiles) > 1:
+            return self.get_profile_breakdown_panel()
+        else:
+            # Single profile: use original quality panel
+            return self.get_quality_panel()
 
 
