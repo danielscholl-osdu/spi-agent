@@ -1,5 +1,6 @@
 """Test runner for executing Maven tests with coverage analysis."""
 
+import logging
 import re
 import subprocess
 from datetime import datetime
@@ -28,6 +29,9 @@ class TestRunner(BaseRunner):
         super().__init__(prompt_file, services)
         self.provider = provider
         self.tracker = TestTracker(services, provider)
+
+        # Initialize logger for coverage extraction debugging
+        self.logger = logging.getLogger(__name__)
 
     @property
     def log_prefix(self) -> str:
@@ -212,8 +216,179 @@ class TestRunner(BaseRunner):
         finally:
             current_process = None
 
+    def _extract_coverage_from_csv(self, service: str, base_path: Path) -> tuple[float, float]:
+        """
+        Extract coverage data from JaCoCo CSV reports.
+
+        CSV format is stable and reliable across JaCoCo versions.
+        Returns (line_coverage_percent, branch_coverage_percent).
+        """
+        # Search for jacoco.csv in multiple locations
+        csv_paths = [
+            base_path / "target" / "site" / "jacoco" / "jacoco.csv",
+        ]
+
+        # Also check provider-specific subdirectories
+        provider_dir = base_path / "provider"
+        if provider_dir.exists():
+            for subdir in provider_dir.iterdir():
+                if subdir.is_dir():
+                    csv_paths.append(subdir / "target" / "site" / "jacoco" / "jacoco.csv")
+
+        # Check for multi-module structures
+        for item in base_path.iterdir():
+            if item.is_dir() and item.name not in ["target", "src", ".git", "provider"]:
+                potential_csv = item / "target" / "site" / "jacoco" / "jacoco.csv"
+                if potential_csv not in csv_paths:
+                    csv_paths.append(potential_csv)
+
+        total_line_covered = 0
+        total_line_missed = 0
+        total_branch_covered = 0
+        total_branch_missed = 0
+        files_parsed = 0
+
+        for csv_path in csv_paths:
+            if not csv_path.exists():
+                continue
+
+            try:
+                self.logger.debug(f"[{service}] Found CSV report: {csv_path}")
+                content = csv_path.read_text(encoding='utf-8')
+                lines = content.strip().split('\n')
+
+                if len(lines) < 2:
+                    self.logger.debug(f"[{service}] CSV file is empty or has no data rows")
+                    continue
+
+                # Skip header row, parse data rows
+                for i, line in enumerate(lines[1:], start=2):
+                    if not line.strip():
+                        continue
+
+                    parts = line.split(',')
+                    if len(parts) < 9:
+                        self.logger.debug(f"[{service}] Skipping malformed CSV row {i}: insufficient columns")
+                        continue
+
+                    try:
+                        # CSV columns: GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,
+                        #              BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,...
+                        branch_missed = int(parts[5])
+                        branch_covered = int(parts[6])
+                        line_missed = int(parts[7])
+                        line_covered = int(parts[8])
+
+                        total_line_covered += line_covered
+                        total_line_missed += line_missed
+                        total_branch_covered += branch_covered
+                        total_branch_missed += branch_missed
+
+                    except (ValueError, IndexError) as e:
+                        self.logger.debug(f"[{service}] Skipping malformed CSV row {i}: {e}")
+                        continue
+
+                files_parsed += 1
+                self.logger.debug(f"[{service}] Parsed CSV with totals - Lines: {total_line_covered}/{total_line_missed}, Branches: {total_branch_covered}/{total_branch_missed}")
+
+            except Exception as e:
+                self.logger.debug(f"[{service}] Failed to parse CSV at {csv_path}: {e}")
+                continue
+
+        # Calculate percentages
+        line_cov = 0.0
+        branch_cov = 0.0
+
+        if total_line_covered + total_line_missed > 0:
+            line_cov = (total_line_covered / (total_line_covered + total_line_missed)) * 100
+
+        if total_branch_covered + total_branch_missed > 0:
+            branch_cov = (total_branch_covered / (total_branch_covered + total_branch_missed)) * 100
+
+        if files_parsed > 0:
+            self.logger.debug(f"[{service}] CSV parsing succeeded: {line_cov:.1f}% line, {branch_cov:.1f}% branch coverage")
+        else:
+            self.logger.debug(f"[{service}] No CSV files found or parsed")
+
+        return (line_cov, branch_cov)
+
+    def _extract_coverage_from_html(self, service: str, base_path: Path) -> tuple[int, int]:
+        """
+        Extract coverage data from JaCoCo HTML reports (DEPRECATED - use CSV).
+
+        HTML parsing is fragile and version-dependent. Use CSV parsing instead.
+        Returns (line_coverage_percent, branch_coverage_percent).
+        """
+        # Try multiple report paths
+        report_paths = [
+            base_path / "target" / "site" / "jacoco" / "index.html",
+        ]
+
+        # Also check provider-specific subdirectories
+        provider_dir = base_path / "provider"
+        if provider_dir.exists():
+            for subdir in provider_dir.iterdir():
+                if subdir.is_dir():
+                    report_paths.append(subdir / "target" / "site" / "jacoco" / "index.html")
+
+        for report_path in report_paths:
+            if not report_path.exists():
+                continue
+
+            try:
+                self.logger.debug(f"[{service}] Found HTML report: {report_path}")
+                content = report_path.read_text(encoding='utf-8')
+
+                # Parse JaCoCo HTML - extract from "X of Y" format in bar cells
+                total_section = re.search(r'<tfoot>.*?</tfoot>', content, re.DOTALL)
+                if total_section:
+                    tfoot_html = total_section.group()
+
+                    # Extract all "X of Y" patterns from bar cells
+                    bar_matches = re.findall(r'class="bar">(\d+(?:,\d+)?) of (\d+(?:,\d+)?)</td>', tfoot_html)
+
+                    if len(bar_matches) >= 2:
+                        # Parse branches
+                        branch_missed = int(bar_matches[1][0].replace(',', ''))
+                        branch_total = int(bar_matches[1][1].replace(',', ''))
+                        branch_covered = branch_total - branch_missed
+                        branch_cov = int((branch_covered / branch_total) * 100) if branch_total > 0 else 0
+
+                        # Extract all ctr1 values (missed counts)
+                        ctr1_values = re.findall(r'class="ctr1">(\d+(?:,\d+)?)</td>', tfoot_html)
+                        # Extract all non-percentage ctr2 values (total counts)
+                        ctr2_all = re.findall(r'class="ctr2">(\d+(?:,\d+)?)</td>', tfoot_html)
+                        ctr2_values = [v for v in ctr2_all if not v.endswith('%') and '%' not in v]
+
+                        # Lines should be: ctr1[1] (missed), ctr2[1] (total)
+                        if len(ctr1_values) >= 2 and len(ctr2_values) >= 2:
+                            line_missed = int(ctr1_values[1].replace(',', ''))
+                            line_total = int(ctr2_values[1].replace(',', ''))
+                            line_cov = int(((line_total - line_missed) / line_total) * 100) if line_total > 0 else 0
+                        else:
+                            # Fallback: use instruction coverage as proxy
+                            inst_missed = int(bar_matches[0][0].replace(',', ''))
+                            inst_total = int(bar_matches[0][1].replace(',', ''))
+                            inst_covered = inst_total - inst_missed
+                            line_cov = int((inst_covered / inst_total) * 100) if inst_total > 0 else 0
+
+                        if line_cov > 0 or branch_cov > 0:
+                            self.logger.debug(f"[{service}] HTML parsing succeeded: {line_cov}% line, {branch_cov}% branch")
+                            return (line_cov, branch_cov)
+
+            except Exception as e:
+                self.logger.debug(f"[{service}] Failed to parse HTML at {report_path}: {e}")
+                continue
+
+        self.logger.debug(f"[{service}] No HTML files found or parsed")
+        return (0, 0)
+
     def _extract_coverage_from_reports(self):
-        """Extract coverage data directly from JaCoCo HTML reports (post-processing)"""
+        """
+        Extract coverage data from JaCoCo reports (post-processing).
+
+        Prioritizes CSV parsing (stable, reliable) with HTML fallback (deprecated).
+        """
         for service in self.services:
             if self.tracker.services[service]["coverage_line"] > 0:
                 continue  # Already have coverage data
@@ -224,108 +399,60 @@ class TestRunner(BaseRunner):
                 Path.cwd() / service,
             ]
 
-            report_found = False
+            coverage_found = False
             for base_path in search_paths:
                 if not base_path.exists():
+                    self.logger.debug(f"[{service}] Path does not exist: {base_path}")
                     continue
 
-                # Try multiple report paths
-                report_paths = [
-                    base_path / "target" / "site" / "jacoco" / "index.html",
-                ]
+                self.logger.debug(f"[{service}] Searching for coverage reports in: {base_path}")
 
-                # Also check provider-specific subdirectories
-                provider_dir = base_path / "provider"
-                if provider_dir.exists():
-                    for subdir in provider_dir.iterdir():
-                        if subdir.is_dir():
-                            report_paths.append(subdir / "target" / "site" / "jacoco" / "index.html")
+                # PRIORITY 1: Try CSV extraction (stable, reliable)
+                line_cov, branch_cov = self._extract_coverage_from_csv(service, base_path)
 
-                for report_path in report_paths:
-                    if report_path.exists():
-                        try:
-                            content = report_path.read_text(encoding='utf-8')
-
-                            # Parse JaCoCo HTML - extract from "X of Y" format in bar cells
-                            # Structure: <tfoot><tr><td>Total</td>
-                            # <td class="bar">0 of 1,036</td>  <- Instructions
-                            # <td class="ctr2">100%</td>
-                            # <td class="bar">3 of 86</td>     <- Branches
-                            # <td class="ctr2">96%</td>
-                            # Then more data for Lines, Methods, Classes...
-
-                            total_section = re.search(r'<tfoot>.*?</tfoot>', content, re.DOTALL)
-                            if total_section:
-                                tfoot_html = total_section.group()
-
-                                # Extract all "X of Y" patterns from bar cells
-                                bar_matches = re.findall(r'class="bar">(\d+(?:,\d+)?) of (\d+(?:,\d+)?)</td>', tfoot_html)
-
-                                if len(bar_matches) >= 2:
-                                    # Format: "MISSED of TOTAL"
-                                    # First bar cell: Instructions (missed of total)
-                                    # Second bar cell: Branches (missed of total)
-                                    # bar_matches[0] = (inst_missed, inst_total)
-                                    # bar_matches[1] = (branch_missed, branch_total)
-
-                                    # Parse branches
-                                    branch_missed = int(bar_matches[1][0].replace(',', ''))
-                                    branch_total = int(bar_matches[1][1].replace(',', ''))
-                                    branch_covered = branch_total - branch_missed
-                                    branch_cov = int((branch_covered / branch_total) * 100) if branch_total > 0 else 0
-
-                                    # Now find line coverage from ctr1/ctr2 pairs
-                                    # After the branch percentage, we should have:
-                                    # <td class="ctr1">X</td><td class="ctr2">Y</td> for complexity
-                                    # <td class="ctr1">X</td><td class="ctr2">Y</td> for lines
-                                    # We want the lines pair (second one)
-
-                                    # Extract all ctr1 values (missed counts)
-                                    ctr1_values = re.findall(r'class="ctr1">(\d+(?:,\d+)?)</td>', tfoot_html)
-                                    # Extract all non-percentage ctr2 values (total counts)
-                                    ctr2_all = re.findall(r'class="ctr2">(\d+(?:,\d+)?)</td>', tfoot_html)
-                                    ctr2_values = [v for v in ctr2_all if not v.endswith('%') and '%' not in v]
-
-                                    # Lines should be: ctr1[1] (missed), ctr2[1] (total)
-                                    # ctr1[0], ctr2[0] = complexity
-                                    # ctr1[1], ctr2[1] = lines
-                                    if len(ctr1_values) >= 2 and len(ctr2_values) >= 2:
-                                        line_missed = int(ctr1_values[1].replace(',', ''))
-                                        line_total = int(ctr2_values[1].replace(',', ''))
-                                        line_cov = int(((line_total - line_missed) / line_total) * 100) if line_total > 0 else 0
-                                    else:
-                                        # Fallback: use instruction coverage as proxy
-                                        inst_missed = int(bar_matches[0][0].replace(',', ''))
-                                        inst_total = int(bar_matches[0][1].replace(',', ''))
-                                        inst_covered = inst_total - inst_missed
-                                        line_cov = int((inst_covered / inst_total) * 100) if inst_total > 0 else 0
-
-                                    if line_cov > 0 or branch_cov > 0:
-                                        self.tracker.update(
-                                            service,
-                                            self.tracker.services[service]["status"],  # Keep current status
-                                            f"Coverage: {line_cov}%/{branch_cov}%",
-                                            phase="coverage",
-                                            coverage_line=line_cov,
-                                            coverage_branch=branch_cov,
-                                        )
-                                        report_found = True
-                                        break
-                        except Exception:
-                            # Silently continue if we can't parse this report
-                            pass
-
-                if report_found:
+                if line_cov > 0 or branch_cov > 0:
+                    self.logger.info(f"[{service}] CSV parsing succeeded: {line_cov:.1f}% line, {branch_cov:.1f}% branch")
+                    self.tracker.update(
+                        service,
+                        self.tracker.services[service]["status"],  # Keep current status
+                        f"Coverage: {int(line_cov)}%/{int(branch_cov)}%",
+                        phase="coverage",
+                        coverage_line=int(line_cov),
+                        coverage_branch=int(branch_cov),
+                    )
+                    coverage_found = True
                     break
+
+                # PRIORITY 2: Fallback to HTML parsing (deprecated, fragile)
+                self.logger.warning(f"[{service}] CSV parsing returned 0% coverage, falling back to HTML parsing (deprecated)")
+                line_cov_html, branch_cov_html = self._extract_coverage_from_html(service, base_path)
+
+                if line_cov_html > 0 or branch_cov_html > 0:
+                    self.logger.warning(f"[{service}] HTML parsing succeeded (deprecated): {line_cov_html}% line, {branch_cov_html}% branch")
+                    self.tracker.update(
+                        service,
+                        self.tracker.services[service]["status"],  # Keep current status
+                        f"Coverage: {line_cov_html}%/{branch_cov_html}%",
+                        phase="coverage",
+                        coverage_line=line_cov_html,
+                        coverage_branch=branch_cov_html,
+                    )
+                    coverage_found = True
+                    break
+                else:
+                    self.logger.warning(f"[{service}] Both CSV and HTML parsing failed to extract coverage")
+
+                if coverage_found:
+                    break
+
+            if not coverage_found:
+                self.logger.warning(f"[{service}] No coverage data found in any location")
 
     def _assess_coverage_quality(self):
         """Assess coverage quality based on coverage metrics."""
         for service in self.services:
             line_cov = self.tracker.services[service]["coverage_line"]
             branch_cov = self.tracker.services[service]["coverage_branch"]
-
-            if line_cov == 0 and branch_cov == 0:
-                continue  # No coverage data to assess
 
             # Determine quality grade
             if line_cov >= 90 and branch_cov >= 85:
@@ -344,6 +471,11 @@ class TestRunner(BaseRunner):
                 grade = "D"
                 label = "Needs Improvement"
                 summary = "Coverage is below recommended levels. Consider adding more tests."
+            elif line_cov == 0 and branch_cov == 0:
+                # Special case: No coverage detected at all
+                grade = "F"
+                label = "No Coverage"
+                summary = "No coverage data detected. Ensure JaCoCo plugin is properly configured."
             else:
                 grade = "F"
                 label = "Poor"
@@ -352,33 +484,47 @@ class TestRunner(BaseRunner):
             # Generate recommendations based on coverage levels
             recommendations = []
 
-            if branch_cov < line_cov - 15:
+            # Special recommendations for zero coverage
+            if line_cov == 0 and branch_cov == 0:
                 recommendations.append({
                     "priority": 1,
-                    "action": "Improve branch coverage by testing edge cases and conditions",
-                    "expected_improvement": f"+{min(10, line_cov - branch_cov)}% branch coverage"
+                    "action": "Ensure JaCoCo Maven plugin is configured in pom.xml",
+                    "expected_improvement": "Enable coverage reporting"
                 })
-
-            if line_cov < 80:
                 recommendations.append({
-                    "priority": 1 if not recommendations else 2,
-                    "action": "Add unit tests for uncovered methods and classes",
-                    "expected_improvement": f"+{min(15, 80 - line_cov)}% line coverage"
+                    "priority": 2,
+                    "action": "Verify tests are being executed during Maven build",
+                    "expected_improvement": "Generate coverage data"
                 })
+            else:
+                # Normal recommendations for non-zero coverage
+                if branch_cov < line_cov - 15:
+                    recommendations.append({
+                        "priority": 1,
+                        "action": "Improve branch coverage by testing edge cases and conditions",
+                        "expected_improvement": f"+{min(10, line_cov - branch_cov)}% branch coverage"
+                    })
 
-            if line_cov >= 80 and branch_cov < 80:
-                recommendations.append({
-                    "priority": len(recommendations) + 1,
-                    "action": "Focus on testing complex conditional logic",
-                    "expected_improvement": "Better branch coverage"
-                })
+                if line_cov < 80:
+                    recommendations.append({
+                        "priority": 1 if not recommendations else 2,
+                        "action": "Add unit tests for uncovered methods and classes",
+                        "expected_improvement": f"+{min(15, 80 - line_cov)}% line coverage"
+                    })
 
-            if grade in ["A", "B"] and len(recommendations) == 0:
-                recommendations.append({
-                    "priority": 1,
-                    "action": "Maintain current coverage levels with new code",
-                    "expected_improvement": "Sustained quality"
-                })
+                if line_cov >= 80 and branch_cov < 80:
+                    recommendations.append({
+                        "priority": len(recommendations) + 1,
+                        "action": "Focus on testing complex conditional logic",
+                        "expected_improvement": "Better branch coverage"
+                    })
+
+                if grade in ["A", "B"] and len(recommendations) == 0:
+                    recommendations.append({
+                        "priority": 1,
+                        "action": "Maintain current coverage levels with new code",
+                        "expected_improvement": "Sustained quality"
+                    })
 
             # Store assessment results
             self.tracker.services[service]["quality_grade"] = grade
@@ -410,14 +556,16 @@ class TestRunner(BaseRunner):
                 result = f"Failed ({data['tests_failed']}/{data['tests_run']} tests)"
                 result_style = "red"
             elif data["status"] == "test_success":
-                if data["tests_run"] > 0:
+                # Prioritize coverage display when available (basis for grade)
+                if data.get("coverage_line", 0) > 0 or data.get("coverage_branch", 0) > 0:
+                    result = f"Cov: {data['coverage_line']}%/{data['coverage_branch']}%"
+                    result_style = "green"
+                elif data["tests_run"] > 0:
+                    # Fallback to test count if no coverage data
                     result = f"Passed ({data['tests_run']} tests)"
                     result_style = "green"
-                elif data.get("coverage_line", 0) > 0:
-                    result = f"Cov: {data['coverage_line']}%/{data['coverage_branch']}%"
-                    result_style = "cyan"
                 else:
-                    # No tests (tests_run == 0) and no coverage
+                    # No tests and no coverage
                     result = "No tests"
                     result_style = "yellow"
             elif data["status"] == "compile_success":
