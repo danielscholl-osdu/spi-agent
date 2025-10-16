@@ -35,6 +35,7 @@ class TriageTracker(BaseTracker):
                 "report_id": "",
                 "top_cves": [],  # List of top CVE details
                 "remediation": "",  # Remediation recommendations
+                "modules": {},  # Module-level breakdown
             }
             for service in services
         }
@@ -70,13 +71,12 @@ class TriageTracker(BaseTracker):
 
     def get_table(self) -> Table:
         """Generate Rich table of triage status"""
-        table = Table(title=self.table_title, expand=True)
+        table = Table(title=self.table_title, expand=False)
         table.add_column("Service", style="cyan", no_wrap=True)
         table.add_column("Status", style="magenta", no_wrap=True)
         table.add_column("Critical", style="red", justify="right", no_wrap=True)
         table.add_column("High", style="yellow", justify="right", no_wrap=True)
         table.add_column("Medium", style="blue", justify="right", no_wrap=True)
-        table.add_column("Details", style="white")
 
         for service, data in self.services.items():
             status_style = {
@@ -107,7 +107,6 @@ class TriageTracker(BaseTracker):
                 critical_str,
                 high_str,
                 medium_str,
-                data["details"],
             )
 
         return table

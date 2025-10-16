@@ -30,7 +30,8 @@ class TriageRunner(BaseRunner):
         agent: "SPIAgent",
         create_issue: bool = False,
         severity_filter: Optional[List[str]] = None,
-        maven_profiles: Optional[List[str]] = None,
+        providers: Optional[List[str]] = None,
+        include_testing: bool = False,
     ):
         """Initialize triage runner.
 
@@ -39,20 +40,49 @@ class TriageRunner(BaseRunner):
             services: List of service names to analyze
             agent: SPIAgent instance with MCP tools
             create_issue: Whether to create tracking issues for findings
-            severity_filter: List of severity levels to include (critical, high, medium)
-            maven_profiles: Maven profiles to activate during scan (default: azure)
+            severity_filter: List of severity levels to include (None = all)
+            providers: Provider modules to include (default: ["azure"])
+            include_testing: Whether to include testing modules (default: False)
         """
         super().__init__(prompt_file, services)
         self.agent = agent
         self.create_issue = create_issue
-        self.severity_filter = severity_filter or ["critical", "high", "medium"]
-        self.maven_profiles = maven_profiles or ["azure"]
+        self.severity_filter = severity_filter  # None = all severities
+        self.providers = providers or ["azure"]  # Default to azure
+        self.include_testing = include_testing
         self.tracker = TriageTracker(services)
 
     @property
     def log_prefix(self) -> str:
         """Return log file prefix for this runner type."""
         return "triage"
+
+    def _get_filter_instructions(self) -> str:
+        """Generate filtering instructions based on provider/testing flags.
+
+        Returns:
+            Instructions for which modules to analyze
+        """
+        # Core modules are always included
+        modules_to_analyze = ["core", "core-plus"]
+
+        # Add requested providers
+        modules_to_analyze.extend(self.providers)
+
+        # Add testing if requested
+        if self.include_testing:
+            modules_to_analyze.append("testing")
+
+        instructions = f"""From the scan results module_summary, ONLY analyze these modules:
+{', '.join(modules_to_analyze)}
+
+Use module_summary field to extract counts for each module.
+Filter by matching module names (e.g., "provider/partition-azure" matches "azure").
+
+In MODULE_BREAKDOWN section, include ONLY the modules listed above.
+Do NOT include other providers or testing modules unless specified.
+"""
+        return instructions
 
     def load_prompt(self) -> str:
         """Load and augment prompt with arguments"""
@@ -63,16 +93,21 @@ class TriageRunner(BaseRunner):
 
         # Inject arguments
         services_arg = ",".join(self.services)
-        severity_arg = ",".join(self.severity_filter)
+        severity_arg = ",".join(self.severity_filter) if self.severity_filter else "all"
         augmented = f"{prompt}\n\nARGUMENTS:\nSERVICES: {services_arg}\nSEVERITY_FILTER: {severity_arg}\nCREATE_ISSUE: {self.create_issue}"
 
         return augmented
 
     def show_config(self):
         """Display run configuration"""
+        severity_str = ', '.join(self.severity_filter).upper() if self.severity_filter else 'ALL'
+        providers_str = ', '.join(self.providers)
+        testing_str = 'included' if self.include_testing else 'excluded'
+
         config_text = f"""[cyan]Services:[/cyan]     {', '.join(self.services)}
-[cyan]Severity:[/cyan]     {', '.join(self.severity_filter).upper()}
-[cyan]Maven Profile:[/cyan] {', '.join(self.maven_profiles)}
+[cyan]Severity:[/cyan]     {severity_str}
+[cyan]Providers:[/cyan]    {providers_str} (core always included)
+[cyan]Testing:[/cyan]      {testing_str}
 [cyan]Create Issue:[/cyan] {'Yes' if self.create_issue else 'No'}"""
 
         console.print(Panel(config_text, title="🔍 Maven Triage Analysis", border_style="blue"))
@@ -152,48 +187,44 @@ class TriageRunner(BaseRunner):
         # Update tracker
         self.tracker.update(service, "analyzing", "Starting triage analysis")
 
-        # Construct very direct prompt to execute the scan tool immediately
-        # Note: include_profiles and severity_filter will be supported in future MCP server versions
-        # For now, we scan everything and filter results by severity afterward
-        severity_str = ', '.join([s.upper() for s in self.severity_filter])
-        profiles_str = ', '.join(self.maven_profiles)
+        # Load scan prompt template
+        try:
+            from importlib.resources import files
+            scan_prompt_file = files("spi_agent.copilot.prompts").joinpath("scan.md")
+            scan_template = scan_prompt_file.read_text(encoding="utf-8")
+        except Exception as e:
+            return f"Error loading scan prompt template: {e}"
 
-        prompt = f"""Execute a complete Maven dependency and vulnerability triage for the {service} service.
+        # Replace template placeholders
+        prompt = scan_template.replace("{{SERVICE}}", service)
+        prompt = scan_template.replace("{{WORKSPACE}}", f"./repos/{service}")
 
-**ACTION REQUIRED - DO NOT ASK FOR CONFIRMATION:**
+        # Add filtering instructions based on provider/testing flags
+        filter_instructions = self._get_filter_instructions()
+        prompt = prompt.replace("{{WORKSPACE}}", f"./repos/{service}")
+        prompt += f"\n\n**FILTERING INSTRUCTIONS:**\n{filter_instructions}"
 
-Call scan_java_project_tool with these exact parameters:
-- workspace: ./repos/{service}
-- max_results: 100
-
-After the scan completes, filter the results to show ONLY vulnerabilities with severity: {severity_str}.
-
-Provide a concise summary with:
-- Total vulnerabilities found (count by severity: Critical, High, Medium) - ONLY for {severity_str} severities
-- Top 5 critical/high findings with CVE IDs, CVSS scores, affected packages
-- Recommended remediation steps
-
-**NOTE**: This scan will use the default Maven configuration. In a future version, it will activate Maven profiles: {profiles_str}
-
-**DO NOT:**
-- Ask me which option to choose
-- Wait for confirmation
-- Show me the triage template
-
-**EXECUTE THE SCAN NOW and return the actual vulnerability findings.**"""
-
+        # Add issue creation if requested
         if self.create_issue:
-            prompt += "\n- After the scan, create a GitHub tracking issue with the findings"
+            prompt += "\n\nAfter completing the analysis, create a GitHub tracking issue with the findings."
 
         try:
             # Update status to scanning
             self.tracker.update(service, "scanning", "Running vulnerability scan...")
 
-            # Add scan initiation to output panel (status command style)
+            # Add scan initiation to output panel
+            modules_to_analyze = ["core", "core-plus"] + self.providers
+            if self.include_testing:
+                modules_to_analyze.append("testing")
+
             self.output_lines.append(f"Starting triage analysis for {service}...")
             self.output_lines.append(f"✓ Scan Java project")
-            self.output_lines.append(f"   $ scan_java_project_tool workspace: ./repos/{service}")
-            self.output_lines.append(f"   ↪ Running Trivy security scan...")
+            self.output_lines.append(f"   $ scan_java_project_tool")
+            self.output_lines.append(f"     workspace: ./repos/{service}")
+            self.output_lines.append(f"     scan_all_modules: true (get complete data)")
+            self.output_lines.append(f"     max_results: 100")
+            self.output_lines.append(f"   ↪ Analyzing modules: {', '.join(modules_to_analyze)}")
+            self.output_lines.append(f"   ↪ Scanning with Trivy (~30-60s)...")
 
             layout["status"].update(self.tracker.get_table())
             layout["output"].update(self.get_output_panel())
@@ -276,7 +307,7 @@ Provide a concise summary with:
             return f"Error analyzing {service}: {str(e)}"
 
     def parse_agent_response(self, service: str, response: str):
-        """Parse agent response to extract vulnerability metrics.
+        """Parse agent response to extract vulnerability metrics and module breakdown.
 
         Args:
             service: Service name
@@ -284,32 +315,75 @@ Provide a concise summary with:
         """
         response_lower = response.lower()
 
-        # Try to extract vulnerability counts from response FIRST
-        # Pattern 1: "X critical, Y high, Z medium"
-        vuln_pattern = r'(\d+)\s+critical.*?(\d+)\s+high.*?(\d+)\s+medium'
-        match = re.search(vuln_pattern, response_lower)
+        # Initialize counts
+        critical = 0
+        high = 0
+        medium = 0
 
-        if match:
-            critical = int(match.group(1))
-            high = int(match.group(2))
-            medium = int(match.group(3))
+        # Parse structured output if present
+        # Format: "Total: Critical=4, High=71, Medium=67, Low=19"
+        summary_pattern = r'total:\s*critical=(\d+),\s*high=(\d+),\s*medium=(\d+)'
+        summary_match = re.search(summary_pattern, response_lower)
+        if summary_match:
+            critical = int(summary_match.group(1))
+            high = int(summary_match.group(2))
+            medium = int(summary_match.group(3))
         else:
-            # Pattern 2: Individual lines
-            critical = 0
-            high = 0
-            medium = 0
+            # Fallback: "Critical: 4, High: 71, Medium: 67" format
+            severity_counts_pattern = r'critical:\s*(\d+)[\s,]+high:\s*(\d+)[\s,]+medium:\s*(\d+)'
+            match = re.search(severity_counts_pattern, response_lower)
+            if match:
+                critical = int(match.group(1))
+                high = int(match.group(2))
+                medium = int(match.group(3))
+            else:
+                # Last resort: Individual searches
+                critical_match = re.search(r'critical[:\s]+(\d+)', response_lower)
+                if critical_match:
+                    critical = int(critical_match.group(1))
 
-            critical_match = re.search(r'critical[:\s]+(\d+)', response_lower)
-            if critical_match:
-                critical = int(critical_match.group(1))
+                high_match = re.search(r'high[:\s]+(\d+)', response_lower)
+                if high_match:
+                    high = int(high_match.group(1))
 
-            high_match = re.search(r'high[:\s]+(\d+)', response_lower)
-            if high_match:
-                high = int(high_match.group(1))
+                medium_match = re.search(r'medium[:\s]+(\d+)', response_lower)
+                if medium_match:
+                    medium = int(medium_match.group(1))
 
-            medium_match = re.search(r'medium[:\s]+(\d+)', response_lower)
-            if medium_match:
-                medium = int(medium_match.group(1))
+        # Extract module breakdown if present in structured format
+        module_data = {}
+        module_section = re.search(
+            r'MODULE_BREAKDOWN:\s*\n(.*?)\nEND_MODULE_BREAKDOWN',
+            response,
+            re.DOTALL | re.IGNORECASE
+        )
+        if module_section:
+            module_lines = module_section.group(1).strip().split('\n')
+            for line in module_lines:
+                line = line.strip()
+                if '|' in line:
+                    parts = [p.strip() for p in line.split('|')]
+                    if len(parts) >= 4:
+                        module_name = parts[0]
+                        module_data[module_name] = {
+                            'critical': int(parts[1]) if parts[1].isdigit() else 0,
+                            'high': int(parts[2]) if parts[2].isdigit() else 0,
+                            'medium': int(parts[3]) if parts[3].isdigit() else 0,
+                        }
+
+        # Store module breakdown for use in Security Assessment panel
+        if module_data:
+            self.tracker.services[service]["modules"] = module_data
+
+            # Recalculate totals from FILTERED modules only
+            filtered_critical = sum(m.get('critical', 0) for m in module_data.values())
+            filtered_high = sum(m.get('high', 0) for m in module_data.values())
+            filtered_medium = sum(m.get('medium', 0) for m in module_data.values())
+
+            # Override the totals with filtered totals
+            critical = filtered_critical
+            high = filtered_high
+            medium = filtered_medium
 
         # Only check for failures if we found NO vulnerability counts at all
         # This prevents false positives where scans succeed but agent mentions errors in explanation
@@ -598,16 +672,24 @@ Provide a concise summary with:
         Returns:
             Letter grade (A, B, C, D, F)
         """
-        # Grade criteria (more lenient for real-world dependency management)
-        # Both conditions must be met for each grade (AND not OR)
-        if critical == 0 and high <= 10:
+        # Security-first grading criteria
+        # Grade A: 0 Critical, 0 High (Excellent - only medium/low issues)
+        if critical == 0 and high == 0:
             return "A"
-        elif critical <= 3 and high <= 40:
+
+        # Grade B: 0 Critical, 1-5 High (Good - minor high-severity issues)
+        elif critical == 0 and high <= 5:
             return "B"
-        elif critical <= 15 and high <= 100:
+
+        # Grade C: 0 Critical, 6-20 High OR 1-2 Critical (Needs Attention)
+        elif (critical == 0 and high <= 20) or (critical <= 2 and high <= 50):
             return "C"
-        elif critical <= 40 and high <= 200:
+
+        # Grade D: 0 Critical, 21+ High OR 3-10 Critical (Poor - significant issues)
+        elif (critical == 0 and high <= 100) or (critical <= 10):
             return "D"
+
+        # Grade F: 11+ Critical OR (Any Critical + 50+ High) (Critical - emergency)
         else:
             return "F"
 
@@ -664,36 +746,39 @@ Provide a concise summary with:
             Recommendation text
         """
         if grade == "A":
-            return "Excellent security posture - maintain current standards"
+            return "Clean - no critical or high-severity vulnerabilities"
         elif grade == "B":
-            if high > 0:
-                return f"Address {high} high-severity vulnerabilities in next sprint"
-            return "Good security posture - schedule routine updates"
+            return f"Address {high} high-severity issue{'s' if high > 1 else ''} in next sprint"
         elif grade == "C":
             if critical > 0:
-                return f"PRIORITY: Patch {critical} critical CVE(s) immediately, then address high-severity issues"
+                return f"PRIORITY: Patch {critical} critical CVE{'s' if critical > 1 else ''} immediately, then {high} high-severity issues"
             return f"Address {high} high-severity vulnerabilities within 2 weeks"
         elif grade == "D":
             if critical > 0:
-                return f"URGENT: Patch {critical} critical CVE(s) this week and create remediation plan for {high} high-severity issues"
-            return f"Create immediate remediation plan for {high} high-severity vulnerabilities"
+                return f"URGENT: {critical} critical CVE{'s' if critical > 1 else ''} + {high} high-severity issues require immediate remediation plan"
+            return f"URGENT: {high} high-severity vulnerabilities require immediate action"
         else:  # F
-            return f"CRITICAL: Immediate action required - {critical} critical and {high} high-severity vulnerabilities pose significant risk"
+            return f"CRITICAL EMERGENCY: {critical} critical + {high} high-severity vulnerabilities - stop deployment until patched"
 
     def get_security_assessment_panel(self) -> Panel:
-        """Generate security assessment panel with table format like test results.
+        """Generate security assessment panel with module-level breakdown.
 
         Returns:
-            Rich Panel with security grade table
+            Rich Panel with security grade table showing module details
         """
         from rich.text import Text
 
         # Create table
         table = Table(show_header=True, header_style="bold", box=None)
-        table.add_column("Service", style="cyan", width=12)
-        table.add_column("Result", style="white", width=40)
+        table.add_column("Module", style="cyan", width=20)
+        table.add_column("Result", style="white", width=20)
         table.add_column("Grade", justify="center", width=7)
         table.add_column("Recommendation", style="white")
+
+        # Track overall totals
+        total_critical = 0
+        total_high = 0
+        total_medium = 0
 
         # Add rows for each service
         for service, data in self.tracker.services.items():
@@ -701,42 +786,34 @@ Provide a concise summary with:
 
             # Check if scan failed (error status)
             if status == "error":
-                # Display error status instead of grades
                 error_details = data.get("details", "Scan failed")
-                result_text = Text(f"Error: {error_details}", style="red")
-                grade_text = Text("—", style="dim")  # Use em-dash for no grade
-                recommendation = "Resolve scan error and re-run (check logs for details)"
-
                 table.add_row(
                     service,
-                    result_text,
-                    grade_text,
-                    recommendation
+                    Text(f"Error: {error_details}", style="red"),
+                    Text("—", style="dim"),
+                    "Resolve scan error and re-run"
                 )
                 continue
 
-            # Normal processing for successful scans
+            # Get service-level counts
             critical = data.get("critical", 0)
             high = data.get("high", 0)
             medium = data.get("medium", 0)
-            total = critical + high + medium
 
-            # Calculate grade
-            svc_grade = self._calculate_service_grade(critical, high, medium)
+            total_critical += critical
+            total_high += high
+            total_medium += medium
 
-            # Grade styling
-            grade_style = {
-                "A": "green bold",
-                "B": "blue bold",
-                "C": "yellow bold",
-                "D": "red bold",
-                "F": "red bold"
-            }.get(svc_grade, "white")
+            # Check if we have module breakdown
+            modules = data.get("modules", {})
 
-            # Result text with breakdown (concise format: just counts)
-            if total == 0:
-                result_text = Text("0C, 0H, 0M", style="green")
-            else:
+            if modules:
+                # Show overall service row first
+                total = critical + high + medium
+                svc_grade = self._calculate_service_grade(critical, high, medium)
+                grade_style = {"A": "green bold", "B": "blue bold", "C": "yellow bold",
+                              "D": "red bold", "F": "red bold"}.get(svc_grade, "white")
+
                 result_parts = []
                 if critical > 0:
                     result_parts.append(f"{critical}C")
@@ -745,45 +822,96 @@ Provide a concise summary with:
                 if medium > 0:
                     result_parts.append(f"{medium}M")
 
-                result_str = ', '.join(result_parts)
+                result_text = Text(', '.join(result_parts) if result_parts else "0 vulns",
+                                 style="red" if critical > 0 else "yellow" if high > 0 else "green")
+
+                table.add_row(
+                    f"[bold]{service} (total)[/bold]",
+                    result_text,
+                    Text(svc_grade, style=grade_style),
+                    self._get_recommendation(critical, high, svc_grade)
+                )
+
+                # Add module breakdown rows
+                for module_name in ["core", "core-plus", "aws", "azure", "gc", "ibm", "testing"]:
+                    if module_name in modules:
+                        mod = modules[module_name]
+                        mod_c = mod.get("critical", 0)
+                        mod_h = mod.get("high", 0)
+                        mod_m = mod.get("medium", 0)
+                        mod_total = mod_c + mod_h + mod_m
+
+                        if mod_total > 0:  # Only show modules with vulnerabilities
+                            mod_grade = self._calculate_service_grade(mod_c, mod_h, mod_m)
+                            mod_grade_style = {"A": "green", "B": "blue", "C": "yellow",
+                                             "D": "red", "F": "red"}.get(mod_grade, "white")
+
+                            mod_parts = []
+                            if mod_c > 0:
+                                mod_parts.append(f"{mod_c}C")
+                            if mod_h > 0:
+                                mod_parts.append(f"{mod_h}H")
+                            if mod_m > 0:
+                                mod_parts.append(f"{mod_m}M")
+
+                            mod_result = Text(', '.join(mod_parts),
+                                            style="red" if mod_c > 0 else "yellow" if mod_h > 0 else "dim")
+
+                            # Short recommendation for modules
+                            if mod_c > 0:
+                                mod_rec = f"Fix {mod_c} critical issue{'s' if mod_c > 1 else ''}"
+                            elif mod_h > 10:
+                                mod_rec = f"Address {mod_h} high-severity issues"
+                            elif mod_h > 0:
+                                mod_rec = "Review high-severity findings"
+                            else:
+                                mod_rec = "Minor updates recommended"
+
+                            table.add_row(
+                                f"  ↳ {module_name}",
+                                mod_result,
+                                Text(mod_grade, style=mod_grade_style),
+                                mod_rec
+                            )
+            else:
+                # No module breakdown - show service row only
+                total = critical + high + medium
+                svc_grade = self._calculate_service_grade(critical, high, medium)
+                grade_style = {"A": "green bold", "B": "blue bold", "C": "yellow bold",
+                              "D": "red bold", "F": "red bold"}.get(svc_grade, "white")
+
+                result_parts = []
                 if critical > 0:
-                    result_text = Text(result_str, style="red")
-                elif high > 0:
-                    result_text = Text(result_str, style="yellow")
-                else:
-                    result_text = Text(result_str, style="blue")
+                    result_parts.append(f"{critical}C")
+                if high > 0:
+                    result_parts.append(f"{high}H")
+                if medium > 0:
+                    result_parts.append(f"{medium}M")
 
-            # Get recommendation
-            recommendation = self._get_recommendation(critical, high, svc_grade)
+                result_text = Text(', '.join(result_parts) if result_parts else "0 vulns",
+                                 style="red" if critical > 0 else "yellow" if high > 0 else "green")
 
-            # Add row
-            table.add_row(
-                service,
-                result_text,
-                Text(svc_grade, style=grade_style),
-                recommendation
-            )
+                table.add_row(
+                    service,
+                    result_text,
+                    Text(svc_grade, style=grade_style),
+                    self._get_recommendation(critical, high, svc_grade)
+                )
 
-        # Calculate overall assessment
-        summary = self.tracker.get_summary()
-        overall_grade = self._calculate_overall_grade()
-        risk_level, risk_color = self._get_risk_level(overall_grade)
-
-        # Create subtitle with overall stats
+        # Simple subtitle with just totals (no confusing overall grade)
         total_services = len(self.tracker.services)
-        subtitle = f"Overall Grade: [{risk_color}]{overall_grade}[/{risk_color}] | "
-        subtitle += f"Risk Level: [{risk_color}]{risk_level}[/{risk_color}] | "
-        subtitle += f"{total_services} service{'s' if total_services > 1 else ''} scanned | "
-        subtitle += f"{summary['critical']}C / {summary['high']}H / {summary['medium']}M vulnerabilities"
+        subtitle = f"{total_services} service{'s' if total_services > 1 else ''} scanned | "
+        subtitle += f"{total_critical}C / {total_high}H / {total_medium}M vulnerabilities"
 
-        # Determine border color based on overall grade
-        border_color = {
-            "A": "green",
-            "B": "blue",
-            "C": "yellow",
-            "D": "red",
-            "F": "red"
-        }.get(overall_grade, "blue")
+        # Border color based on worst finding
+        if total_critical > 0:
+            border_color = "red"
+        elif total_high >= 20:
+            border_color = "yellow"
+        elif total_high > 0:
+            border_color = "blue"
+        else:
+            border_color = "green"
 
         return Panel(
             table,
@@ -808,7 +936,8 @@ Provide a concise summary with:
         log_parts.append("="*70)
         log_parts.append(f"Timestamp: {datetime.now().isoformat()}")
         log_parts.append(f"Services: {', '.join(self.services)}")
-        log_parts.append(f"Severity Filter: {', '.join(self.severity_filter)}")
+        severity_str = ', '.join(self.severity_filter) if self.severity_filter else 'all'
+        log_parts.append(f"Severity Filter: {severity_str}")
         log_parts.append(f"="*70)
         log_parts.append("")
         log_parts.append("=== TRIAGE RESULTS ===")
@@ -927,7 +1056,6 @@ Provide a concise summary with:
                 responses = await gather(*tasks)
 
                 # Add scan completion message to output panel
-                self.output_lines.append("")
                 self.output_lines.append("✓ Scans complete for all services")
                 layout["output"].update(self.get_output_panel())
                 layout["status"].update(self.tracker.get_table())
@@ -976,7 +1104,8 @@ Provide a concise summary with:
                 f.write(f"{'='*70}\n")
                 f.write(f"Timestamp: {datetime.now().isoformat()}\n")
                 f.write(f"Services: {', '.join(self.services)}\n")
-                f.write(f"Severity Filter: {', '.join(self.severity_filter)}\n")
+                severity_str = ', '.join(self.severity_filter) if self.severity_filter else 'all'
+                f.write(f"Severity Filter: {severity_str}\n")
                 f.write(f"Create Issue: {self.create_issue}\n")
                 f.write(f"Exit Code: {return_code}\n")
                 f.write(f"{'='*70}\n\n")

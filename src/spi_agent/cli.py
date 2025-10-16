@@ -168,26 +168,29 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "triage":
         if len(parts) < 2:
-            return "Usage: /triage <services> [--create-issue] [--severity critical,high,medium] [--profile azure]\nExample: /triage partition"
+            return "Usage: /triage <services> [--create-issue] [--severity LEVEL] [--providers PROVIDERS] [--include-testing]\nExample: /triage partition\nExample: /triage partition --providers azure,aws --include-testing"
 
         services_arg = parts[1]
         create_issue = "--create-issue" in parts
 
-        # Parse --severity flag
-        severity_filter = ["critical", "high", "medium"]  # Default
+        # Parse --severity flag (None = server scans all severities)
+        severity_filter = None
         if "--severity" in parts:
             severity_idx = parts.index("--severity")
             if severity_idx + 1 < len(parts):
                 severity_arg = parts[severity_idx + 1]
                 severity_filter = [s.strip().lower() for s in severity_arg.split(",")]
 
-        # Parse --profile flag
-        maven_profiles = ["azure"]  # Default
-        if "--profile" in parts:
-            profile_idx = parts.index("--profile")
-            if profile_idx + 1 < len(parts):
-                profile_arg = parts[profile_idx + 1]
-                maven_profiles = [p.strip() for p in profile_arg.split(",")]
+        # Parse --providers flag (default: azure)
+        providers = ["azure"]
+        if "--providers" in parts:
+            providers_idx = parts.index("--providers")
+            if providers_idx + 1 < len(parts):
+                providers_arg = parts[providers_idx + 1]
+                providers = [p.strip().lower() for p in providers_arg.split(",")]
+
+        # Parse --include-testing flag
+        include_testing = "--include-testing" in parts
 
         try:
             prompt_file = copilot_module.get_prompt_file("triage.md")
@@ -199,7 +202,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
-        severity_str = ", ".join(severity_filter).upper()
+        severity_str = ", ".join(severity_filter).upper() if severity_filter else "ALL"
         console.print(f"\n[yellow]Running triage analysis for: {', '.join(services)} (severity: {severity_str})[/yellow]\n")
 
         # Use workflow function to store results for agent context
@@ -210,7 +213,8 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
                 agent=agent,
                 services=services,
                 severity_filter=severity_filter,
-                maven_profiles=maven_profiles,
+                providers=providers,
+                include_testing=include_testing,
                 create_issue=create_issue,
             )
 
@@ -495,13 +499,18 @@ Examples:
         )
         triage_parser.add_argument(
             "--severity",
-            default="critical,high,medium",
-            help="Severity filter: critical, high, medium, low (default: critical,high,medium)",
+            default=None,
+            help="Severity filter: critical, high, medium, low (default: all severities)",
         )
         triage_parser.add_argument(
-            "--profile",
+            "--providers",
             default="azure",
-            help="Maven profile(s) to activate: azure, aws, gc, ibm, or comma-separated list (default: azure)",
+            help="Provider(s) to include: azure, aws, gc, ibm, core, or comma-separated list (default: azure)",
+        )
+        triage_parser.add_argument(
+            "--include-testing",
+            action="store_true",
+            help="Include testing modules in analysis (default: excluded)",
         )
 
     parser.add_argument(
@@ -613,11 +622,16 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
             return 1
 
-        # Parse severity filter
-        severity_filter = [s.strip().lower() for s in parsed.severity.split(",")]
+        # Parse severity filter (None = server scans all severities)
+        severity_filter = None
+        if parsed.severity:
+            severity_filter = [s.strip().lower() for s in parsed.severity.split(",")]
 
-        # Parse maven profiles
-        maven_profiles = [p.strip() for p in parsed.profile.split(",")]
+        # Parse providers filter (default: azure + core modules always included)
+        providers = [p.strip().lower() for p in parsed.providers.split(",")]
+
+        # Include testing if flag set
+        include_testing = parsed.include_testing
 
         # Create agent with MCP tools for triage
         config = AgentConfig()
@@ -637,7 +651,8 @@ async def async_main(args: Optional[list[str]] = None) -> int:
                 agent,
                 parsed.create_issue,
                 severity_filter,
-                maven_profiles,
+                providers,
+                include_testing,
             )
             return await runner.run()
 

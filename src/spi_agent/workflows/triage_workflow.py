@@ -23,7 +23,8 @@ async def run_triage_workflow(
     agent: "SPIAgent",
     services: List[str],
     severity_filter: List[str],
-    maven_profiles: List[str],
+    providers: List[str],
+    include_testing: bool = False,
     create_issue: bool = False,
 ) -> WorkflowResult:
     """Run triage workflow for specified services.
@@ -38,7 +39,8 @@ async def run_triage_workflow(
         agent: SPIAgent instance with MCP tools
         services: List of service names to analyze
         severity_filter: List of severity levels to include
-        maven_profiles: Maven profiles to activate during scan
+        providers: Provider modules to include (e.g., ["azure", "aws"])
+        include_testing: Whether to include testing modules
         create_issue: Whether to create GitHub tracking issues
 
     Returns:
@@ -75,7 +77,8 @@ async def run_triage_workflow(
                 agent=agent,
                 create_issue=create_issue,
                 severity_filter=severity_filter,
-                maven_profiles=maven_profiles,
+                providers=providers,
+                include_testing=include_testing,
             )
 
             # Execute triage analysis
@@ -117,7 +120,8 @@ async def run_triage_workflow(
                 "exit_code": exit_code,
                 "services_data": runner.tracker.services if hasattr(runner, "tracker") else {},
                 "severity_filter": severity_filter,
-                "maven_profiles": maven_profiles,
+                "providers": providers,
+                "include_testing": include_testing,
                 "create_issue": create_issue,
             }
 

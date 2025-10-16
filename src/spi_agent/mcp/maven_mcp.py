@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from agent_framework import MCPStdioTool
 
 from spi_agent.config import AgentConfig
+from spi_agent.mcp.tool_arg_normalizer import normalize_maven_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +264,11 @@ class MavenMCPManager:
                 arguments = call_args_list[0]
                 argument_source = "args0"
 
+            # First normalize workspace paths
             normalized_arguments = self._normalize_tool_arguments(arguments)
+
+            # Then normalize array parameters (e.g., profiles) that LLM might return as strings
+            normalized_arguments = normalize_maven_tool_arguments(normalized_arguments)
 
             if normalized_arguments is not arguments:
                 if argument_source == "kwargs":
@@ -277,6 +282,14 @@ class MavenMCPManager:
             workspace = normalized_arguments.get("workspace", "unknown") if isinstance(normalized_arguments, dict) else "unknown"
             workspace_name = Path(workspace).name if workspace != "unknown" else "workspace"
             logger.info(f"🔧 Maven MCP: {tool_name} → {workspace_name}")
+
+            # Debug: Log the exact arguments being sent to MCP server
+            logger.debug(f"MCP Tool Call - Name: {tool_name}")
+            logger.debug(f"MCP Tool Call - Arguments: {normalized_arguments}")
+            logger.debug(f"MCP Tool Call - Argument Types: {type(normalized_arguments)}")
+            if isinstance(normalized_arguments, dict):
+                for key, value in normalized_arguments.items():
+                    logger.debug(f"  {key}: {value} (type: {type(value).__name__})")
 
             result = await original_call_tool(*call_args_list, **call_kwargs)
 

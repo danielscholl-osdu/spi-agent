@@ -61,8 +61,9 @@ class AgentConfig:
         default_factory=lambda: [
             "--quiet",  # Suppress uvx output
             # Pin to specific version for reproducibility
-            # Can override via MAVEN_MCP_VERSION env var (e.g., "mvn-mcp-server==2.3.0")
-            os.getenv("MAVEN_MCP_VERSION", "mvn-mcp-server==2.2.1"),
+            # v2.3.0 includes per-module vulnerability tracking and severity filtering
+            # Can override via MAVEN_MCP_VERSION env var
+            os.getenv("MAVEN_MCP_VERSION", "mvn-mcp-server==2.3.0"),
             # Note: stderr is redirected to logs/maven_mcp_*.log by QuietMCPStdioTool
         ]
     )

@@ -96,7 +96,7 @@ The agent requires environment variables for Azure OpenAI access. Configure thes
 | `SPI_AGENT_ORGANIZATION` | `danielscholl-osdu` | GitHub organization to manage |
 | `SPI_AGENT_REPOSITORIES` | `partition,legal,entitlements,schema,file,storage` | Comma-separated repository list |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | *(none)* | Azure Application Insights for observability |
-| `MAVEN_MCP_VERSION` | `mvn-mcp-server==2.2.1` | Override Maven MCP Server version |
+| `MAVEN_MCP_VERSION` | `mvn-mcp-server==2.3.0` | Override Maven MCP Server version |
 
 **Platform-specific setup:**
 
@@ -125,7 +125,7 @@ spi-agent
 
 The agent provides conversational access to GitHub operations and Maven dependency management. Use natural language to manage issues, pull requests, workflows, and security scanning across your OSDU SPI repositories.
 
-**Maven dependency scanning** is automatically available via the [Maven MCP Server](https://github.com/danielscholl/mvn-mcp-server) (v2.2.1, auto-installed). For security vulnerability scanning, install [Trivy](https://trivy.dev) (optional).
+**Maven dependency scanning** is automatically available via the [Maven MCP Server](https://github.com/danielscholl/mvn-mcp-server) (v2.3.0, auto-installed). For security vulnerability scanning, install [Trivy](https://trivy.dev) (optional).
 
 For command-line options:
 ```bash
