@@ -1,5 +1,6 @@
 """Copilot fork runner for repository initialization."""
 
+import re
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import List, Union
@@ -29,6 +30,31 @@ class CopilotRunner(BaseRunner):
     def log_prefix(self) -> str:
         """Return log file prefix for this runner type."""
         return "fork"
+
+    def _service_in_line(self, service: str, line: str) -> bool:
+        """
+        Check if a service name appears as a complete word in a line using word-boundary matching.
+
+        This prevents false matches where one service name is a substring of another
+        (e.g., "indexer" matching within "indexer-queue").
+
+        Args:
+            service: The service name to search for
+            line: The line of text to search in (should be lowercased)
+
+        Returns:
+            True if service name appears as a complete word in the line
+        """
+        # Escape special regex characters in service name
+        escaped_service = re.escape(service)
+
+        # Create pattern with word boundaries that respect hyphens
+        # We need to ensure the service name is not part of a larger hyphenated word
+        # Use negative lookbehind/lookahead to ensure no alphanumeric or hyphen characters surround the match
+        pattern = r'(?<![a-zA-Z0-9\-])' + escaped_service + r'(?![a-zA-Z0-9\-])'
+
+        # Search for the pattern (case-insensitive, though lines are typically already lowercased)
+        return bool(re.search(pattern, line, re.IGNORECASE))
 
     def load_prompt(self) -> str:
         """Load and augment prompt with arguments"""
@@ -66,7 +92,7 @@ class CopilotRunner(BaseRunner):
                     self.tracker.update(service, "success", "Completed successfully")
                     continue
             # Check for section headers mentioning service
-            elif line_stripped.startswith("###") and service in line_lower and "service" in line_lower:
+            elif line_stripped.startswith("###") and self._service_in_line(service, line_lower) and "service" in line_lower:
                 if "✅" in line or "✓" in line:
                     self.tracker.update(service, "success", "Completed successfully")
                     continue
@@ -96,7 +122,7 @@ class CopilotRunner(BaseRunner):
         for service in self.services:
             # Check if line mentions this service with the word "service"
             # This ensures we're talking about the service itself, not just using the word in context
-            service_mentioned = service in line_lower and "service" in line_lower
+            service_mentioned = self._service_in_line(service, line_lower) and "service" in line_lower
 
             if service_mentioned:
                 # Count success keywords present
@@ -122,7 +148,7 @@ class CopilotRunner(BaseRunner):
         # First, check if this task mentions a specific service
         target_service = None
         for service in self.services:
-            if service in line_lower:
+            if self._service_in_line(service, line_lower):
                 target_service = service
                 break
 
@@ -139,7 +165,7 @@ class CopilotRunner(BaseRunner):
             if "check if" in task_desc and "repository already exists" in task_desc:
                 # Don't update yet - waiting for result
                 pass
-            elif "create" in task_desc and "repository" in task_desc:
+            elif "create" in task_desc and ("repository" in task_desc or "repo" in task_desc):
                 self.tracker.update(service_to_update, "running", "Creating repository")
             elif "wait" in task_desc or "workflow" in task_desc:
                 self.tracker.update(service_to_update, "waiting", "Waiting for workflow")
@@ -188,7 +214,7 @@ class CopilotRunner(BaseRunner):
 
         # Service-specific updates
         for service in self.services:
-            if service in line_lower:
+            if self._service_in_line(service, line_lower):
                 current_status = self.tracker.services[service]["status"]
 
                 # Only mark as skipped if workflow explicitly terminates

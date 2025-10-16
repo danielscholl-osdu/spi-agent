@@ -1,10 +1,12 @@
 """Tests for copilot module (TestRunner, TestTracker, TriageRunner, TriageTracker)."""
 
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
 from spi_agent.copilot import SERVICES, TestRunner, TestTracker, TriageRunner, TriageTracker, parse_services
+from spi_agent.copilot.runners.copilot_runner import CopilotRunner
 
 
 class TestParseServices:
@@ -541,3 +543,212 @@ class TestTestRunner:
         runner._assess_coverage_quality()
         assert runner.tracker.services["partition"]["quality_grade"] == "F"
         assert runner.tracker.services["partition"]["quality_label"] == "Poor"
+
+
+class TestCopilotRunner:
+    """Tests for CopilotRunner class (fork command)."""
+
+    @pytest.fixture
+    def mock_prompt_file(self, tmp_path):
+        """Create a mock prompt file."""
+        prompt_file = tmp_path / "fork.md"
+        prompt_file.write_text(
+            "Fork prompt template\n{{ORGANIZATION}}\nARGUMENTS:\nSERVICES: {{services}}\nBRANCH: {{branch}}"
+        )
+        return prompt_file
+
+    def test_service_in_line_exact_match(self, mock_prompt_file):
+        """Test _service_in_line with exact service name match."""
+        runner = CopilotRunner(mock_prompt_file, ["partition"], branch="main")
+
+        # Should match exact service name
+        assert runner._service_in_line("partition", "partition service completed") is True
+        assert runner._service_in_line("partition", "✅ Successfully completed workflow for partition service") is True
+
+    def test_service_in_line_no_substring_match(self, mock_prompt_file):
+        """Test _service_in_line does NOT match when service is substring of another word."""
+        runner = CopilotRunner(mock_prompt_file, ["indexer", "indexer-queue"], branch="main")
+
+        # "indexer" should NOT match within "indexer-queue"
+        assert runner._service_in_line("indexer", "✅ Successfully completed workflow for indexer-queue service") is False
+
+        # "indexer-queue" should match exactly
+        assert runner._service_in_line("indexer-queue", "✅ Successfully completed workflow for indexer-queue service") is True
+
+    def test_service_in_line_hyphenated_names(self, mock_prompt_file):
+        """Test _service_in_line with hyphenated service names."""
+        runner = CopilotRunner(mock_prompt_file, ["indexer-queue"], branch="main")
+
+        # Should match complete hyphenated name
+        assert runner._service_in_line("indexer-queue", "indexer-queue service is ready") is True
+        assert runner._service_in_line("indexer-queue", "the indexer-queue repository") is True
+
+        # Should NOT match partial hyphenated name
+        assert runner._service_in_line("indexer", "indexer-queue service is ready") is False
+
+    def test_service_in_line_word_boundaries(self, mock_prompt_file):
+        """Test _service_in_line respects word boundaries."""
+        runner = CopilotRunner(mock_prompt_file, ["legal", "partition"], branch="main")
+
+        # Should match at word boundaries
+        assert runner._service_in_line("legal", "legal service completed") is True
+        assert runner._service_in_line("legal", "the legal repository") is True
+        assert runner._service_in_line("legal", "✓ legal: done") is True
+
+        # Should NOT match within other words
+        assert runner._service_in_line("legal", "illegally parsed") is False
+
+    def test_parse_output_indexer_queue_completion(self, mock_prompt_file):
+        """
+        Regression test: Verify indexer-queue completion is parsed correctly.
+
+        This test ensures that when the line "✅ Successfully completed workflow for indexer-queue service"
+        is parsed, only the indexer-queue service status is updated, NOT the indexer service.
+
+        Bug: Previously, "indexer" would match within "indexer-queue" due to substring matching,
+        causing the wrong service to be marked as complete.
+        """
+        runner = CopilotRunner(
+            mock_prompt_file,
+            ["partition", "indexer", "indexer-queue", "search"],
+            branch="main"
+        )
+
+        # Initially all services are pending
+        assert runner.tracker.services["indexer"]["status"] == "pending"
+        assert runner.tracker.services["indexer-queue"]["status"] == "pending"
+
+        # Parse the indexer-queue completion line
+        runner.parse_output("✅ Successfully completed workflow for indexer-queue service")
+
+        # indexer-queue should be marked as success
+        assert runner.tracker.services["indexer-queue"]["status"] == "success"
+        assert runner.tracker.services["indexer-queue"]["details"] == "Completed successfully"
+
+        # indexer should still be pending (NOT updated by mistake)
+        assert runner.tracker.services["indexer"]["status"] == "pending"
+
+        # Other services should remain pending
+        assert runner.tracker.services["partition"]["status"] == "pending"
+        assert runner.tracker.services["search"]["status"] == "pending"
+
+    def test_parse_output_indexer_completion(self, mock_prompt_file):
+        """Test that indexer service completion is parsed correctly."""
+        runner = CopilotRunner(
+            mock_prompt_file,
+            ["indexer", "indexer-queue"],
+            branch="main"
+        )
+
+        # Parse the indexer completion line (not indexer-queue)
+        runner.parse_output("✅ Successfully completed workflow for indexer service")
+
+        # indexer should be marked as success
+        assert runner.tracker.services["indexer"]["status"] == "success"
+
+        # indexer-queue should still be pending
+        assert runner.tracker.services["indexer-queue"]["status"] == "pending"
+
+    def test_parse_output_multiple_hyphenated_services(self, mock_prompt_file):
+        """Test parsing with multiple hyphenated service names."""
+        runner = CopilotRunner(
+            mock_prompt_file,
+            ["partition", "file", "storage", "indexer", "indexer-queue", "workflow"],
+            branch="main"
+        )
+
+        # Test workflow completion (workflow is also a common word in output)
+        runner.parse_output("✅ Successfully completed workflow for workflow service")
+        assert runner.tracker.services["workflow"]["status"] == "success"
+        assert runner.tracker.services["indexer"]["status"] == "pending"
+
+        # Test partition completion
+        runner.parse_output("✅ Successfully completed workflow for partition service")
+        assert runner.tracker.services["partition"]["status"] == "success"
+
+    def test_parse_output_service_order_independence(self, mock_prompt_file):
+        """
+        Test that service matching is independent of service order.
+
+        Previously, the bug would occur because services were checked in order,
+        and "indexer" appeared before "indexer-queue" in the list, causing
+        early substring match and break.
+        """
+        # Test with indexer-queue before indexer
+        runner1 = CopilotRunner(
+            mock_prompt_file,
+            ["indexer-queue", "indexer"],
+            branch="main"
+        )
+        runner1.parse_output("✅ Successfully completed workflow for indexer-queue service")
+        assert runner1.tracker.services["indexer-queue"]["status"] == "success"
+        assert runner1.tracker.services["indexer"]["status"] == "pending"
+
+        # Test with indexer before indexer-queue (original bug scenario)
+        runner2 = CopilotRunner(
+            mock_prompt_file,
+            ["indexer", "indexer-queue"],
+            branch="main"
+        )
+        runner2.parse_output("✅ Successfully completed workflow for indexer-queue service")
+        assert runner2.tracker.services["indexer-queue"]["status"] == "success"
+        assert runner2.tracker.services["indexer"]["status"] == "pending"
+
+    def test_parse_output_task_markers_with_indexer_queue(self, mock_prompt_file):
+        """Test that task completion markers correctly identify indexer-queue."""
+        runner = CopilotRunner(
+            mock_prompt_file,
+            ["indexer", "indexer-queue"],
+            branch="main"
+        )
+
+        # Test task marker for indexer-queue
+        runner.parse_output("✓ Create indexer-queue repo from template")
+        assert runner.tracker.services["indexer-queue"]["status"] == "running"
+        assert "Creating repository" in runner.tracker.services["indexer-queue"]["details"]
+
+        # indexer should not be affected
+        assert runner.tracker.services["indexer"]["status"] == "pending"
+
+    def test_parse_actual_fork_log(self, mock_prompt_file):
+        """
+        Test parsing the actual fork log file that exhibited the bug.
+
+        This test reads the actual log file (if it exists) and verifies that
+        indexer-queue is correctly marked as success, not pending.
+        """
+        log_file_path = Path("logs/fork_20251016_080723_partition-entitlements-legal-and-7-more.log")
+
+        if not log_file_path.exists():
+            pytest.skip(f"Log file not found: {log_file_path}")
+
+        # All services from the log
+        all_services = [
+            "partition",
+            "entitlements",
+            "legal",
+            "schema",
+            "file",
+            "storage",
+            "indexer",
+            "indexer-queue",
+            "search",
+            "workflow"
+        ]
+
+        runner = CopilotRunner(mock_prompt_file, all_services, branch="main")
+
+        # Parse all lines from the log file
+        with open(log_file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                runner.parse_output(line.strip())
+
+        # Verify indexer-queue is marked as success, NOT pending
+        assert runner.tracker.services["indexer-queue"]["status"] == "success", \
+            "indexer-queue should be marked as success after parsing the log file"
+
+        # Verify all services have a final status (none should be pending)
+        for service in all_services:
+            status = runner.tracker.services[service]["status"]
+            assert status in ["success", "skipped", "error"], \
+                f"{service} should have a final status, but is: {status}"
