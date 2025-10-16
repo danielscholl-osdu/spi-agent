@@ -85,6 +85,15 @@ class AgentConfig:
         default_factory=lambda: os.getenv("SPI_AGENT_HOSTED_TOOLS_MODE", "complement")  # type: ignore
     )
 
+    # Azure AI Foundry Configuration (for ai_agent client type)
+    azure_ai_project_endpoint: Optional[str] = field(
+        default_factory=lambda: os.getenv("AZURE_AI_PROJECT_ENDPOINT")
+    )
+
+    azure_ai_project_connection_string: Optional[str] = field(
+        default_factory=lambda: os.getenv("AZURE_AI_PROJECT_CONNECTION_STRING")
+    )
+
     def validate(self) -> None:
         """Validate configuration and raise ValueError if invalid."""
         if not self.organization:

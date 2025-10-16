@@ -5,8 +5,8 @@ from importlib import resources
 from typing import Optional
 
 from agent_framework import ChatAgent
-from agent_framework.azure import AzureOpenAIResponsesClient
-from azure.identity import AzureCliCredential
+from agent_framework.azure import AzureOpenAIResponsesClient, AzureAIAgentClient
+from azure.identity import AzureCliCredential, DefaultAzureCredential
 
 from spi_agent.config import AgentConfig
 from spi_agent.filesystem import create_hybrid_filesystem_tools
@@ -44,30 +44,58 @@ class SPIAgent:
         # Load agent instructions from system prompt
         self.instructions = self._load_system_prompt()
 
-        # Initialize Azure OpenAI client
-        # For authentication, user must run `az login` or provide API key
-        client_params = {
-            "credential": AzureCliCredential(),
-        }
+        # Initialize Azure client based on client_type
+        if self.config.client_type == "ai_agent":
+            # Azure AI Foundry Agent Client
+            logger.info("Using Azure AI Foundry Agent Client")
 
-        # Add required parameters
-        if self.config.azure_openai_endpoint:
-            client_params["endpoint"] = self.config.azure_openai_endpoint
+            # Parse connection string if provided
+            project_endpoint = self.config.azure_ai_project_endpoint
+            if not project_endpoint and self.config.azure_ai_project_connection_string:
+                # Parse: "region.api.azureml.ms;subscription_id;resource_group;workspace_name"
+                parts = self.config.azure_ai_project_connection_string.split(';')
+                if len(parts) >= 1:
+                    project_endpoint = f"https://{parts[0]}"
+                    logger.info(f"Parsed project endpoint from connection string: {project_endpoint}")
 
-        if self.config.azure_openai_deployment:
-            client_params["deployment_name"] = self.config.azure_openai_deployment
+            if not project_endpoint:
+                raise ValueError(
+                    "Azure AI Foundry client requires AZURE_AI_PROJECT_ENDPOINT or "
+                    "AZURE_AI_PROJECT_CONNECTION_STRING environment variable"
+                )
 
-        if self.config.azure_openai_api_version:
-            client_params["api_version"] = self.config.azure_openai_api_version
+            # Create AI Agent client
+            chat_client = AzureAIAgentClient(
+                project_endpoint=project_endpoint,
+                model_deployment_name=self.config.azure_openai_deployment,
+                async_credential=DefaultAzureCredential(),
+            )
+            logger.info(f"Azure AI Agent client initialized with endpoint: {project_endpoint}")
+        else:
+            # Azure OpenAI Responses Client (default/current)
+            logger.info("Using Azure OpenAI Responses Client")
+            client_params = {
+                "credential": AzureCliCredential(),
+            }
 
-        # Handle authentication
-        if self.config.azure_openai_api_key:
-            # If API key provided, don't use credential
-            client_params.pop("credential", None)
-            client_params["api_key"] = self.config.azure_openai_api_key
+            # Add required parameters
+            if self.config.azure_openai_endpoint:
+                client_params["endpoint"] = self.config.azure_openai_endpoint
 
-        # Create chat client
-        chat_client = AzureOpenAIResponsesClient(**client_params)
+            if self.config.azure_openai_deployment:
+                client_params["deployment_name"] = self.config.azure_openai_deployment
+
+            if self.config.azure_openai_api_version:
+                client_params["api_version"] = self.config.azure_openai_api_version
+
+            # Handle authentication
+            if self.config.azure_openai_api_key:
+                # If API key provided, don't use credential
+                client_params.pop("credential", None)
+                client_params["api_key"] = self.config.azure_openai_api_key
+
+            # Create chat client
+            chat_client = AzureOpenAIResponsesClient(**client_params)
 
         # Initialize hosted tools manager
         self.hosted_tools_manager = HostedToolsManager(self.config, chat_client=chat_client)

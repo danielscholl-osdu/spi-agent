@@ -120,15 +120,17 @@ class HostedToolsManager:
             # Note: These are marker tools that inform the service about capabilities
 
             # File search tool - for file operations
-            if "file_search" in self._available_tool_types:
-                try:
-                    file_search_tool = HostedFileSearchTool(
-                        description="Search and read files in the workspace. Can list files, read file contents, and search across files."
-                    )
-                    self._tools.append(file_search_tool)
-                    logger.debug("Initialized HostedFileSearchTool")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize HostedFileSearchTool: {e}")
+            # NOTE: File search requires vector store setup in Azure AI Project
+            # Disabled for now to test web search and code interpreter
+            # if "file_search" in self._available_tool_types:
+            #     try:
+            #         file_search_tool = HostedFileSearchTool(
+            #             description="Search and read files in the workspace. Can list files, read file contents, and search across files."
+            #         )
+            #         self._tools.append(file_search_tool)
+            #         logger.debug("Initialized HostedFileSearchTool")
+            #     except Exception as e:
+            #         logger.warning(f"Failed to initialize HostedFileSearchTool: {e}")
 
             # Code interpreter tool - for dynamic analysis
             if "code_interpreter" in self._available_tool_types:
@@ -142,15 +144,17 @@ class HostedToolsManager:
                     logger.warning(f"Failed to initialize HostedCodeInterpreterTool: {e}")
 
             # Web search tool - for external lookups
-            if "web_search" in self._available_tool_types:
-                try:
-                    web_search_tool = HostedWebSearchTool(
-                        description="Search the web for current information, documentation, and external resources."
-                    )
-                    self._tools.append(web_search_tool)
-                    logger.debug("Initialized HostedWebSearchTool")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize HostedWebSearchTool: {e}")
+            # NOTE: Web search requires Bing connection setup in Azure AI Project
+            # Disabled for now to test code interpreter
+            # if "web_search" in self._available_tool_types:
+            #     try:
+            #         web_search_tool = HostedWebSearchTool(
+            #             description="Search the web for current information, documentation, and external resources."
+            #         )
+            #         self._tools.append(web_search_tool)
+            #         logger.debug("Initialized HostedWebSearchTool")
+            #     except Exception as e:
+            #         logger.warning(f"Failed to initialize HostedWebSearchTool: {e}")
 
             logger.info(f"Initialized {len(self._tools)} hosted tools")
 
