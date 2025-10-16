@@ -1,5 +1,6 @@
 """Main SPI Agent implementation."""
 
+import logging
 from importlib import resources
 from typing import Optional
 
@@ -8,13 +9,16 @@ from agent_framework.azure import AzureOpenAIResponsesClient
 from azure.identity import AzureCliCredential
 
 from spi_agent.config import AgentConfig
-from spi_agent.filesystem import create_filesystem_tools
+from spi_agent.filesystem import create_hybrid_filesystem_tools
 from spi_agent.github import create_github_tools
+from spi_agent.hosted_tools import HostedToolsManager
 from spi_agent.middleware import (
     logging_chat_middleware,
     logging_function_middleware,
     workflow_context_agent_middleware,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SPIAgent:
@@ -35,7 +39,6 @@ class SPIAgent:
         """
         self.config = config or AgentConfig()
         self.github_tools = create_github_tools(self.config)
-        self.filesystem_tools = create_filesystem_tools(self.config)
         self.mcp_tools = mcp_tools or []
 
         # Load agent instructions from system prompt
@@ -65,6 +68,23 @@ class SPIAgent:
 
         # Create chat client
         chat_client = AzureOpenAIResponsesClient(**client_params)
+
+        # Initialize hosted tools manager
+        self.hosted_tools_manager = HostedToolsManager(self.config, chat_client=chat_client)
+
+        # Log hosted tools status
+        if self.hosted_tools_manager.is_available:
+            status = self.hosted_tools_manager.get_status_summary()
+            logger.info(
+                f"Hosted tools enabled: {status['tool_count']} tools available (mode: {status['mode']})"
+            )
+        elif self.config.hosted_tools_enabled:
+            logger.info("Hosted tools requested but not available - using custom tools")
+
+        # Create hybrid filesystem tools (combines hosted + custom based on config)
+        self.filesystem_tools = create_hybrid_filesystem_tools(
+            self.config, self.hosted_tools_manager
+        )
 
         # Combine GitHub tools, file system tools, and MCP tools
         all_tools = self.github_tools + self.filesystem_tools + self.mcp_tools

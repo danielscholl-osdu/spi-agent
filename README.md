@@ -118,6 +118,8 @@ The agent requires environment variables for Azure OpenAI access. Configure thes
 | `SPI_AGENT_REPOSITORIES` | `partition,legal,entitlements,schema,file,storage` | Comma-separated repository list |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | *(none)* | Azure Application Insights for observability |
 | `MAVEN_MCP_VERSION` | `mvn-mcp-server==2.3.0` | Override Maven MCP Server version |
+| `SPI_AGENT_HOSTED_TOOLS_ENABLED` | `false` | Enable Microsoft Agent Framework hosted tools |
+| `SPI_AGENT_HOSTED_TOOLS_MODE` | `complement` | Hosted tools mode (`complement`, `replace`, `fallback`) |
 
 **Platform-specific setup:**
 
@@ -181,6 +183,38 @@ uv run pytest tests/test_agent.py -v
 ```
 
 **Note:** The `.env` file is provided for convenience during development. The agent still reads from `os.getenv()`, so ensure your shell environment variables are set or use a tool like `python-dotenv` if needed.
+
+## Advanced Features
+
+### Hosted Tools Integration (Experimental)
+
+The SPI Agent supports Microsoft Agent Framework's hosted tools, which provide service-managed capabilities for file search, code interpretation, and web search. By default, the agent uses custom filesystem tools optimized for OSDU repositories.
+
+**Enable Hosted Tools:**
+
+```bash
+export SPI_AGENT_HOSTED_TOOLS_ENABLED=true
+export SPI_AGENT_HOSTED_TOOLS_MODE=complement  # or 'replace', 'fallback'
+```
+
+**Hosted Tools Modes:**
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `complement` (default) | Use both hosted and custom tools together | Maximum flexibility - agent chooses best tool |
+| `replace` | Use hosted tools for general operations, keep specialized custom tools | Leverage service optimization while preserving OSDU-specific features |
+| `fallback` | Prioritize custom tools, use hosted tools as backup | Conservative approach - prefer proven local tools |
+
+**Available Hosted Tools:**
+- 🔍 **File Search** - Service-managed file searching and content indexing
+- 💻 **Code Interpreter** - Dynamic code execution capabilities
+- 🌐 **Web Search** - Internet search for current information
+
+**Important Notes:**
+- Specialized OSDU tools (POM parsing, dependency tracking) are always preserved
+- Hosted tools are currently designed for Azure AI Agent Client
+- Custom filesystem tools remain the default and recommended approach
+- See [Hosted Tools Research](ai-specs/hosted-tools-research.md) for technical details
 
 ## Documentation
 

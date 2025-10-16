@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from dotenv import load_dotenv
 
@@ -23,6 +23,9 @@ class AgentConfig:
         azure_openai_deployment: Azure OpenAI deployment/model name
         azure_openai_api_version: Azure OpenAI API version
         azure_openai_api_key: Azure OpenAI API key (optional if using Azure CLI auth)
+        client_type: Type of Azure client to use ('openai' or 'ai_agent')
+        hosted_tools_enabled: Enable Microsoft Agent Framework hosted tools
+        hosted_tools_mode: How to integrate hosted tools ('complement', 'replace', 'fallback')
     """
 
     organization: str = field(
@@ -68,6 +71,20 @@ class AgentConfig:
         ]
     )
 
+    # Hosted Tools Configuration
+    client_type: Literal["openai", "ai_agent"] = field(
+        default_factory=lambda: os.getenv("SPI_AGENT_CLIENT_TYPE", "openai")  # type: ignore
+    )
+
+    hosted_tools_enabled: bool = field(
+        default_factory=lambda: os.getenv("SPI_AGENT_HOSTED_TOOLS_ENABLED", "false").lower()
+        == "true"
+    )
+
+    hosted_tools_mode: Literal["complement", "replace", "fallback"] = field(
+        default_factory=lambda: os.getenv("SPI_AGENT_HOSTED_TOOLS_MODE", "complement")  # type: ignore
+    )
+
     def validate(self) -> None:
         """Validate configuration and raise ValueError if invalid."""
         if not self.organization:
@@ -78,6 +95,15 @@ class AgentConfig:
 
         # Clean up repository names (strip whitespace)
         self.repositories = [repo.strip() for repo in self.repositories if repo.strip()]
+
+        # Validate hosted tools configuration
+        if self.client_type not in ["openai", "ai_agent"]:
+            raise ValueError(f"client_type must be 'openai' or 'ai_agent', got '{self.client_type}'")
+
+        if self.hosted_tools_mode not in ["complement", "replace", "fallback"]:
+            raise ValueError(
+                f"hosted_tools_mode must be 'complement', 'replace', or 'fallback', got '{self.hosted_tools_mode}'"
+            )
 
     def get_repo_full_name(self, repo: str) -> str:
         """Get full repository name (org/repo)."""
