@@ -255,11 +255,15 @@ class StatusRunner(BaseRunner):
             workflows = service_data.get("workflows", {}).get("recent", [])
             if workflows:
                 # Count workflow statuses
+                # Note: action_required is a CONCLUSION, not a status
+                needs_approval = sum(1 for w in workflows if w.get("conclusion") == "action_required")
                 running = sum(1 for w in workflows if w.get("status") in ["in_progress", "queued", "waiting"])
-                completed = sum(1 for w in workflows if w.get("status") == "completed")
+                completed = sum(1 for w in workflows if w.get("status") == "completed" and w.get("conclusion") == "success")
                 failed = sum(1 for w in workflows if w.get("status") == "completed" and w.get("conclusion") in ["failure", "cancelled"])
 
-                if running > 0:
+                if needs_approval > 0:
+                    workflow_display = f"[red]⊙ {needs_approval} need approval[/red]"
+                elif running > 0:
                     workflow_display = f"[yellow]▶ {running} running[/yellow]"
                 elif failed > 0:
                     workflow_display = f"[red]✗ {failed} failed[/red]"
@@ -297,30 +301,131 @@ class StatusRunner(BaseRunner):
         console.print(summary_table)
         console.print()
 
-        # Release PRs Table (if any)
-        release_prs = []
+        # Open Issues with grouping (MOVED BEFORE PRs)
+        issue_groups = {}  # Group issues by title to detect duplicates
+        for service_name, service_data in services_data.items():
+            issues = service_data.get("issues", {}).get("items", [])
+            for issue in issues:
+                title = issue.get("title", "")
+                if title not in issue_groups:
+                    issue_groups[title] = {
+                        "number": issue.get("number"),
+                        "labels": issue.get("labels", []),
+                        "assignees": issue.get("assignees", []),
+                        "services": []
+                    }
+                issue_groups[title]["services"].append(service_name)
+
+        if issue_groups:
+            issue_content = []
+            for title, data in issue_groups.items():
+                labels = ", ".join(data["labels"]) if data["labels"] else ""
+                services = ", ".join(data["services"])
+                assignees = ", ".join(data["assignees"]) if data["assignees"] else "Unassigned"
+
+                # Highlight human-required issues
+                if "human-required" in data["labels"]:
+                    issue_content.append(f"[bold red]#{data['number']}[/bold red] {title}")
+                    issue_content.append("   [red]⚠ Requires manual intervention[/red]")
+                else:
+                    issue_content.append(f"[yellow]#{data['number']}[/yellow] {title}")
+
+                if len(data["services"]) > 1:
+                    issue_content.append(f"   Affects: [cyan]{services}[/cyan]")
+                else:
+                    issue_content.append(f"   Service: [cyan]{services}[/cyan]")
+
+                # Show assignees
+                if data["assignees"]:
+                    # Highlight Copilot assignments
+                    if "Copilot" in assignees or "copilot-swe-agent" in assignees:
+                        issue_content.append(f"   Assigned: [blue]🤖 {assignees}[/blue]")
+                    else:
+                        issue_content.append(f"   Assigned: [dim]{assignees}[/dim]")
+                else:
+                    issue_content.append(f"   Assigned: [dim]None[/dim]")
+
+                if labels:
+                    issue_content.append(f"   Labels: [dim]{labels}[/dim]")
+                issue_content.append("")
+
+            console.print(Panel(
+                "\n".join(issue_content),
+                title="📝 Open Issues",
+                border_style="yellow"
+            ))
+            console.print()
+
+        # Open PRs Panel - Show all open PRs with details
+        all_prs = []
+        release_prs = []  # Track release PRs separately for "Next Steps"
         for service_name, service_data in services_data.items():
             prs = service_data.get("pull_requests", {}).get("items", [])
             for pr in prs:
+                all_prs.append((service_name, pr))
                 if pr.get("is_release", False):
                     release_prs.append((service_name, pr))
 
-        if release_prs:
-            pr_table = Table(title="🚀 Release Pull Requests", expand=True)
-            pr_table.add_column("Service", style="cyan")
-            pr_table.add_column("PR", style="magenta")
-            pr_table.add_column("Status", style="yellow")
+        if all_prs:
+            pr_content = []
+            for service_name, pr in all_prs:
+                pr_number = pr.get("number")
+                title = pr.get("title", "")
+                state = pr.get("state", "unknown").upper()
+                is_draft = pr.get("is_draft", False)
+                branch = pr.get("headRefName", "unknown")
+                is_release = pr.get("is_release", False)
+                author = pr.get("author", "unknown")
 
-            for service_name, pr in release_prs:
-                state = pr.get("state", "unknown")
-                state_color = "green" if state == "open" else "dim"
-                pr_table.add_row(
-                    service_name,
-                    f"#{pr['number']}: {pr['title']}",
-                    f"[{state_color}]{state}[/{state_color}]"
-                )
+                # Detect Copilot authorship
+                is_copilot_pr = "copilot" in branch.lower() or author == "app/copilot-swe-agent"
 
-            console.print(pr_table)
+                # Format title with state indicator
+                if is_draft:
+                    pr_content.append(f"[yellow]#{pr_number}[/yellow] [dim](Draft)[/dim] {title}")
+                elif is_release:
+                    pr_content.append(f"[magenta]#{pr_number}[/magenta] [bold]🚀 {title}[/bold]")
+                else:
+                    pr_content.append(f"[cyan]#{pr_number}[/cyan] {title}")
+
+                # Show author for all PRs
+                if is_copilot_pr:
+                    pr_content.append(f"   Author: [blue]🤖 Copilot[/blue]")
+                else:
+                    pr_content.append(f"   Author: [dim]{author}[/dim]")
+
+                # Show state and branch
+                state_display = f"[yellow]{state}[/yellow]" if is_draft else f"[green]{state}[/green]"
+                pr_content.append(f"   State: {state_display} | Branch: [dim]{branch}[/dim]")
+
+                # ONLY show workflow status for Copilot PRs (they require approval)
+                if is_copilot_pr:
+                    pr_head_sha = pr.get("headRefOid")
+                    workflows = service_data.get("workflows", {}).get("recent", [])
+
+                    # Match workflows to this specific PR by commit SHA
+                    if pr_head_sha:
+                        pr_workflows = [w for w in workflows if w.get("headSha") == pr_head_sha]
+
+                        if pr_workflows:
+                            needs_approval = sum(1 for w in pr_workflows if w.get("conclusion") == "action_required")
+                            running = sum(1 for w in pr_workflows if w.get("status") in ["in_progress", "queued", "waiting"])
+                            passed = sum(1 for w in pr_workflows if w.get("status") == "completed" and w.get("conclusion") == "success")
+
+                            if needs_approval > 0:
+                                pr_content.append(f"   Workflows: [red bold]⊙ {needs_approval} need approval[/red bold]")
+                            elif running > 0:
+                                pr_content.append(f"   Workflows: [yellow]▶ {running} running[/yellow]")
+                            elif passed > 0:
+                                pr_content.append(f"   Workflows: [green]✓ {passed} passed[/green]")
+
+                pr_content.append("")
+
+            console.print(Panel(
+                "\n".join(pr_content),
+                title="🔀 Open Pull Requests",
+                border_style="magenta"
+            ))
             console.print()
 
         # Workflow Details Section
@@ -346,7 +451,10 @@ class StatusRunner(BaseRunner):
                         created = workflow.get("created_at", "")
 
                         # Format status
-                        if status == "completed":
+                        # Note: action_required is a CONCLUSION, not a status
+                        if conclusion == "action_required":
+                            status_display = "[red bold]⊙ action_required[/red bold]"
+                        elif status == "completed":
                             if conclusion == "success":
                                 status_display = "[green]✓ success[/green]"
                             elif conclusion == "failure":
@@ -386,49 +494,6 @@ class StatusRunner(BaseRunner):
             console.print(workflow_table)
             console.print()
 
-        # Open Issues with grouping
-        issue_groups = {}  # Group issues by title to detect duplicates
-        for service_name, service_data in services_data.items():
-            issues = service_data.get("issues", {}).get("items", [])
-            for issue in issues:
-                title = issue.get("title", "")
-                if title not in issue_groups:
-                    issue_groups[title] = {
-                        "number": issue.get("number"),
-                        "labels": issue.get("labels", []),
-                        "services": []
-                    }
-                issue_groups[title]["services"].append(service_name)
-
-        if issue_groups:
-            issue_content = []
-            for title, data in issue_groups.items():
-                labels = ", ".join(data["labels"]) if data["labels"] else ""
-                services = ", ".join(data["services"])
-
-                # Highlight human-required issues
-                if "human-required" in data["labels"]:
-                    issue_content.append(f"[bold red]#{data['number']}[/bold red] {title}")
-                    issue_content.append("   [red]⚠ Requires manual intervention[/red]")
-                else:
-                    issue_content.append(f"[yellow]#{data['number']}[/yellow] {title}")
-
-                if len(data["services"]) > 1:
-                    issue_content.append(f"   Affects: [cyan]{services}[/cyan]")
-                else:
-                    issue_content.append(f"   Service: [cyan]{services}[/cyan]")
-
-                if labels:
-                    issue_content.append(f"   Labels: [dim]{labels}[/dim]")
-                issue_content.append("")
-
-            console.print(Panel(
-                "\n".join(issue_content),
-                title="📝 Open Issues",
-                border_style="yellow"
-            ))
-            console.print()
-
         # Next Steps / Quick Actions
         next_steps = []
 
@@ -448,6 +513,22 @@ class StatusRunner(BaseRunner):
         if release_prs:
             next_steps.append(f"[magenta]🚀[/magenta] Review {len(release_prs)} release PR(s) for merging")
 
+        # Check for workflows needing approval
+        approval_needed = {}
+        for service_name, service_data in services_data.items():
+            workflows = service_data.get("workflows", {}).get("recent", [])
+            # Note: action_required is a CONCLUSION, not a status
+            needs_approval = sum(1 for w in workflows if w.get("conclusion") == "action_required")
+            if needs_approval > 0:
+                approval_needed[service_name] = needs_approval
+
+        if approval_needed:
+            total_approval = sum(approval_needed.values())
+            services_list = ", ".join(approval_needed.keys())
+            next_steps.append(f"[red bold]⊙ {total_approval} workflow(s) need approval (manual)[/red bold]")
+            next_steps.append(f"  Services: {services_list}")
+            next_steps.append(f"  💡 Approve in GitHub UI for Copilot PRs to continue")
+
         # Check for running workflows
         total_running = sum(
             sum(1 for w in service_data.get("workflows", {}).get("recent", [])
@@ -456,7 +537,7 @@ class StatusRunner(BaseRunner):
         )
         if total_running > 0:
             next_steps.append(f"[yellow]▶[/yellow] {total_running} workflow(s) still running")
-        else:
+        elif not approval_needed:
             next_steps.append("[green]✓[/green] All workflows completed")
 
         if next_steps:

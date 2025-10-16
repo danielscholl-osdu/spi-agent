@@ -1,6 +1,7 @@
 """Workflow and Actions tools for GitHub."""
 
 import json
+import subprocess
 from typing import Annotated, Optional
 
 from github import GithubException
@@ -326,3 +327,225 @@ class WorkflowTools(GitHubToolsBase):
             return f"GitHub API error: {e.data.get('message', str(e))}"
         except Exception as e:
             return f"Error cancelling workflow run: {str(e)}"
+
+    def check_pr_workflow_approvals(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+    ) -> str:
+        """
+        Check if a PR has workflow runs waiting for approval.
+
+        Returns formatted string with approval status.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+
+            # Use gh CLI to get workflow runs for the PR
+            result = subprocess.run(
+                [
+                    "gh",
+                    "pr",
+                    "checks",
+                    str(pr_number),
+                    "-R",
+                    repo_full_name,
+                    "--json",
+                    "name,state,bucket,startedAt,completedAt",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode != 0:
+                return f"Failed to get PR checks for #{pr_number} in {repo_full_name}\nError: {result.stderr}"
+
+            checks = json.loads(result.stdout)
+
+            # Check for workflow approval needed
+            # GitHub shows specific states for checks
+            pending_approvals = []
+            running_checks = []
+            passed_checks = []
+            failed_checks = []
+
+            for check in checks:
+                state = check.get("state", "")
+                bucket = check.get("bucket", "")
+                name = check.get("name", "Unknown")
+                started_at = check.get("startedAt")
+
+                # "pending" state without start time means awaiting approval
+                if state == "pending" and not started_at:
+                    pending_approvals.append(name)
+                elif state == "pending" or bucket == "pass":
+                    running_checks.append(name)
+                elif state == "success" or bucket == "pass":
+                    passed_checks.append(name)
+                elif state in ["failure", "error"] or bucket == "fail":
+                    failed_checks.append(name)
+
+            output_lines = [f"Workflow Status for PR #{pr_number} in {repo_full_name}:\n\n"]
+
+            if pending_approvals:
+                output_lines.append(f"⏳ Workflows awaiting approval: {len(pending_approvals)}\n")
+                for name in pending_approvals[:5]:  # Limit to first 5
+                    output_lines.append(f"   - {name}\n")
+                if len(pending_approvals) > 5:
+                    output_lines.append(f"   ... and {len(pending_approvals) - 5} more\n")
+                output_lines.append("\n")
+
+            if running_checks:
+                output_lines.append(f"⏳ Running: {len(running_checks)}\n")
+                for name in running_checks[:3]:
+                    output_lines.append(f"   - {name}\n")
+                output_lines.append("\n")
+
+            if passed_checks:
+                output_lines.append(f"✓ Passed: {len(passed_checks)}\n")
+
+            if failed_checks:
+                output_lines.append(f"✗ Failed: {len(failed_checks)}\n")
+                for name in failed_checks[:3]:
+                    output_lines.append(f"   - {name}\n")
+                output_lines.append("\n")
+
+            if pending_approvals:
+                output_lines.append(
+                    f"\n💡 Note: Approve workflows manually in GitHub UI for this PR to continue\n"
+                )
+
+            return "".join(output_lines)
+
+        except subprocess.TimeoutExpired:
+            return f"Timeout while checking PR #{pr_number} workflows"
+        except FileNotFoundError:
+            return "GitHub CLI (gh) is not installed or not in PATH"
+        except json.JSONDecodeError:
+            return f"Failed to parse workflow check data for PR #{pr_number}"
+        except Exception as e:
+            return f"Error checking PR workflow approvals: {str(e)}"
+
+    def approve_pr_workflows(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+    ) -> str:
+        """
+        Approve pending workflow runs for a PR.
+
+        Uses GitHub CLI to approve workflows that are waiting for approval.
+        Returns formatted string with approval confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+
+            # First, get the PR to find its head SHA
+            result = subprocess.run(
+                [
+                    "gh",
+                    "pr",
+                    "view",
+                    str(pr_number),
+                    "-R",
+                    repo_full_name,
+                    "--json",
+                    "headRefOid",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode != 0:
+                return f"Failed to get PR #{pr_number} details\nError: {result.stderr}"
+
+            pr_data = json.loads(result.stdout)
+            head_sha = pr_data.get("headRefOid")
+
+            if not head_sha:
+                return f"Could not find commit SHA for PR #{pr_number}"
+
+            # Get workflow runs for this commit that need approval
+            # Note: action_required is a CONCLUSION not a status
+            result = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"/repos/{repo_full_name}/actions/runs?head_sha={head_sha}",
+                    "--jq",
+                    ".workflow_runs[] | select(.conclusion == \"action_required\") | {id, name, status, conclusion}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode != 0:
+                return f"Failed to get workflow runs for PR #{pr_number}\nError: {result.stderr}"
+
+            # Parse workflow runs (each line is a JSON object)
+            workflow_runs = []
+            for line in result.stdout.strip().split("\n"):
+                if line:
+                    try:
+                        workflow_runs.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+            if not workflow_runs:
+                return f"No workflows awaiting approval for PR #{pr_number} in {repo_full_name}"
+
+            # Approve each workflow run
+            approved = []
+            failed = []
+
+            for run in workflow_runs:
+                run_id = run.get("id")
+                run_name = run.get("name", "Unknown")
+
+                approve_result = subprocess.run(
+                    [
+                        "gh",
+                        "api",
+                        "-X",
+                        "POST",
+                        f"/repos/{repo_full_name}/actions/runs/{run_id}/approve",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+
+                if approve_result.returncode == 0:
+                    approved.append(run_name)
+                else:
+                    failed.append((run_name, approve_result.stderr))
+
+            # Format output
+            output_lines = []
+
+            if approved:
+                output_lines.append(
+                    f"✓ Approved {len(approved)} workflow(s) for PR #{pr_number} in {repo_full_name}:\n"
+                )
+                for name in approved:
+                    output_lines.append(f"  ✓ {name}\n")
+                output_lines.append("\nWorkflows will now start running.\n")
+
+            if failed:
+                output_lines.append(f"\n✗ Failed to approve {len(failed)} workflow(s):\n")
+                for name, error in failed:
+                    output_lines.append(f"  ✗ {name}: {error}\n")
+
+            return "".join(output_lines)
+
+        except subprocess.TimeoutExpired:
+            return f"Timeout while approving workflows for PR #{pr_number}"
+        except FileNotFoundError:
+            return "GitHub CLI (gh) is not installed or not in PATH"
+        except json.JSONDecodeError as e:
+            return f"Failed to parse workflow data: {str(e)}"
+        except Exception as e:
+            return f"Error approving PR workflows: {str(e)}"

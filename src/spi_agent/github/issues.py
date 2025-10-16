@@ -1,5 +1,6 @@
 """Issue management tools for GitHub."""
 
+import subprocess
 from typing import Annotated, Optional
 
 from github import GithubException
@@ -407,3 +408,58 @@ class IssueTools(GitHubToolsBase):
             return f"GitHub API error: {e.data.get('message', str(e))}"
         except Exception as e:
             return f"Error searching issues: {str(e)}"
+
+    def assign_issue_to_copilot(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        issue_number: Annotated[int, Field(description="Issue number to assign")],
+    ) -> str:
+        """
+        Assign an issue to GitHub Copilot coding agent.
+
+        Uses GitHub CLI to assign the issue to 'copilot-swe-agent' since
+        the REST API doesn't support assigning to the Copilot bot.
+
+        Returns formatted string with assignment confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+
+            # Use gh CLI to assign to copilot-swe-agent
+            result = subprocess.run(
+                [
+                    "gh",
+                    "issue",
+                    "edit",
+                    str(issue_number),
+                    "-R",
+                    repo_full_name,
+                    "--add-assignee",
+                    "copilot-swe-agent",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode == 0:
+                return (
+                    f"✓ Assigned issue #{issue_number} to Copilot in {repo_full_name}\n"
+                    f"URL: {result.stdout.strip()}\n"
+                )
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                return (
+                    f"Failed to assign issue #{issue_number} to Copilot in {repo_full_name}\n"
+                    f"Error: {error_msg}\n"
+                )
+
+        except subprocess.TimeoutExpired:
+            return f"Timeout while assigning issue #{issue_number} in {repo}"
+        except FileNotFoundError:
+            return (
+                "GitHub CLI (gh) is not installed or not in PATH. "
+                "Please install it from https://cli.github.com/"
+            )
+        except Exception as e:
+            return f"Error assigning issue to Copilot: {str(e)}"

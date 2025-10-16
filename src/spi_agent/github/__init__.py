@@ -88,6 +88,10 @@ class GitHubTools:
         """Search issues across repositories."""
         return self._issues.search_issues(*args, **kwargs)
 
+    def assign_issue_to_copilot(self, *args, **kwargs):
+        """Assign an issue to GitHub Copilot coding agent."""
+        return self._issues.assign_issue_to_copilot(*args, **kwargs)
+
     # ============ PULL REQUESTS ============
 
     def list_pull_requests(self, *args, **kwargs):
@@ -140,6 +144,10 @@ class GitHubTools:
         """Cancel a running workflow."""
         return self._workflows.cancel_workflow_run(*args, **kwargs)
 
+    def check_pr_workflow_approvals(self, *args, **kwargs):
+        """Check if a PR has workflows waiting for approval."""
+        return self._workflows.check_pr_workflow_approvals(*args, **kwargs)
+
     # ============ CODE SCANNING ============
 
     def list_code_scanning_alerts(self, *args, **kwargs):
@@ -168,10 +176,10 @@ def create_github_tools(config: AgentConfig) -> List:
         config: Agent configuration containing GitHub token and org info
 
     Returns:
-        List of 21 bound tool methods organized by domain:
-        - Issues (7 tools): list, get, get_comments, create, update, add_comment, search
+        List of 23 bound tool methods organized by domain:
+        - Issues (8 tools): list, get, get_comments, create, update, add_comment, search, assign_to_copilot
         - Pull Requests (7 tools): list, get, get_comments, create, update, merge, add_comment
-        - Workflows/Actions (5 tools): list, list_runs, get_run, trigger, cancel_run
+        - Workflows/Actions (6 tools): list, list_runs, get_run, trigger, cancel_run, check_pr_approvals
         - Code Scanning (2 tools): list_alerts, get_alert
     """
     # Create specialized tool instances
@@ -184,14 +192,15 @@ def create_github_tools(config: AgentConfig) -> List:
     # Return bound methods directly from specialized tool classes
     # This preserves type annotations that were lost when accessing via GitHubTools wrapper
     return [
-        # Issues (7 tools)
+        # Issues (8 tools)
         issues.list_issues,
-        issues.get_issue,
         issues.get_issue_comments,
+        issues.get_issue,
         issues.create_issue,
         issues.update_issue,
         issues.add_issue_comment,
         issues.search_issues,
+        issues.assign_issue_to_copilot,
         # Pull Requests (7 tools)
         pull_requests.list_pull_requests,
         pull_requests.get_pull_request,
@@ -200,12 +209,13 @@ def create_github_tools(config: AgentConfig) -> List:
         pull_requests.update_pull_request,
         pull_requests.merge_pull_request,
         pull_requests.add_pr_comment,
-        # Workflows/Actions (5 tools)
+        # Workflows/Actions (6 tools)
         workflows.list_workflows,
         workflows.list_workflow_runs,
         workflows.get_workflow_run,
         workflows.trigger_workflow,
         workflows.cancel_workflow_run,
+        workflows.check_pr_workflow_approvals,
         # Code Scanning (2 tools)
         code_scanning.list_code_scanning_alerts,
         code_scanning.get_code_scanning_alert,

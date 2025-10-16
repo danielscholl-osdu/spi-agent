@@ -1133,3 +1133,68 @@ def test_get_code_scanning_alert_with_null_severity(
     assert "Code Scanning Alert #15" in result
     assert "Unused Variable" in result
     assert "Unknown" in result or "unknown" in result
+
+
+def test_assign_issue_to_copilot_success(
+    test_config: AgentConfig, mock_github: Mock
+):
+    """Test successful issue assignment to Copilot."""
+    from unittest.mock import MagicMock, patch
+    
+    tools = GitHubTools(test_config)
+    
+    # Mock successful subprocess run
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "https://github.com/test-org/test-repo1/issues/42\n"
+    mock_result.stderr = ""
+    
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        result = tools.assign_issue_to_copilot(repo="test-repo1", issue_number=42)
+        
+        assert "✓ Assigned issue #42 to Copilot" in result
+        assert "test-org/test-repo1" in result
+        
+        # Verify gh CLI was called correctly
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert call_args == [
+            "gh", "issue", "edit", "42", "-R", "test-org/test-repo1",
+            "--add-assignee", "copilot-swe-agent"
+        ]
+
+
+def test_assign_issue_to_copilot_failure(
+    test_config: AgentConfig, mock_github: Mock
+):
+    """Test failed issue assignment to Copilot."""
+    from unittest.mock import MagicMock, patch
+    
+    tools = GitHubTools(test_config)
+    
+    # Mock failed subprocess run
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = ""
+    mock_result.stderr = "'copilot-swe-agent' not found\n"
+    
+    with patch("subprocess.run", return_value=mock_result):
+        result = tools.assign_issue_to_copilot(repo="test-repo1", issue_number=42)
+        
+        assert "Failed to assign issue #42" in result
+        assert "not found" in result
+
+
+def test_assign_issue_to_copilot_gh_not_installed(
+    test_config: AgentConfig, mock_github: Mock
+):
+    """Test assignment when gh CLI is not installed."""
+    from unittest.mock import patch
+    
+    tools = GitHubTools(test_config)
+    
+    with patch("subprocess.run", side_effect=FileNotFoundError()):
+        result = tools.assign_issue_to_copilot(repo="test-repo1", issue_number=42)
+        
+        assert "GitHub CLI (gh) is not installed" in result
+        assert "https://cli.github.com/" in result

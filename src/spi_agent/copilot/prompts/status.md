@@ -62,16 +62,16 @@ For each service, execute the following GitHub CLI commands:
     Purpose: Verify repository exists and get basic info
 
 2. GET_ISSUES:
-    $ gh issue list --repo {OWNER}/{REPO} --json number,title,labels,state --limit 10
-    Purpose: Retrieve open issues
+    $ gh issue list --repo {OWNER}/{REPO} --json number,title,labels,state,assignees --limit 10
+    Purpose: Retrieve open issues with assignee information
 
 3. GET_PULL_REQUESTS:
-    $ gh pr list --repo {OWNER}/{REPO} --json number,title,state,headRefName,isDraft --limit 10
-    Purpose: Retrieve open pull requests (highlight release PRs with "chore: release" or "release" in title)
+    $ gh pr list --repo {OWNER}/{REPO} --json number,title,state,headRefName,headRefOid,isDraft,author --limit 10
+    Purpose: Retrieve open pull requests with author and commit SHA for workflow matching (highlight release PRs with "chore: release" or "release" in title)
 
 4. GET_WORKFLOW_RUNS:
-    $ gh run list --repo {OWNER}/{REPO} --json name,status,conclusion,createdAt,updatedAt --limit 10
-    Purpose: Get recent workflow runs (includes CodeQL, Build, Test, etc.)
+    $ gh run list --repo {OWNER}/{REPO} --json name,status,conclusion,createdAt,updatedAt,headSha --limit 10
+    Purpose: Get recent workflow runs with commit SHA for PR matching (includes CodeQL, Build, Test, etc.)
 
 </GATHERING_TASKS>
 
@@ -98,13 +98,15 @@ CRITICAL: Your response must be ONLY the JSON output below. Do not include any n
             "number": 1,
             "title": "Repository Initialization Required",
             "labels": ["initialization"],
-            "state": "open"
+            "state": "open",
+            "assignees": ["danielscholl"]
           },
           {
             "number": 2,
             "title": "Update documentation",
             "labels": ["documentation"],
-            "state": "open"
+            "state": "open",
+            "assignees": ["copilot-swe-agent"]
           }
         ]
       },
@@ -115,7 +117,9 @@ CRITICAL: Your response must be ONLY the JSON output below. Do not include any n
             "number": 12,
             "title": "chore: release 1.0.0",
             "state": "open",
-            "branch": "main",
+            "headRefName": "main",
+            "headRefOid": "abc123def456...",
+            "author": "github-actions",
             "is_draft": false,
             "is_release": true
           }
@@ -127,6 +131,7 @@ CRITICAL: Your response must be ONLY the JSON output below. Do not include any n
             "name": "Build",
             "status": "completed",
             "conclusion": "success",
+            "headSha": "abc123def456...",
             "created_at": "2025-01-06T09:00:00Z",
             "updated_at": "2025-01-06T09:05:00Z"
           },
@@ -134,6 +139,7 @@ CRITICAL: Your response must be ONLY the JSON output below. Do not include any n
             "name": "CodeQL Analysis",
             "status": "completed",
             "conclusion": "success",
+            "headSha": "abc123def456...",
             "created_at": "2025-01-06T08:45:00Z",
             "updated_at": "2025-01-06T09:12:00Z"
           },
@@ -141,6 +147,7 @@ CRITICAL: Your response must be ONLY the JSON output below. Do not include any n
             "name": "Test",
             "status": "in_progress",
             "conclusion": null,
+            "headSha": "xyz789abc123...",
             "created_at": "2025-01-06T09:00:00Z",
             "updated_at": "2025-01-06T09:03:00Z"
           }
@@ -158,6 +165,8 @@ IMPORTANT RULES:
 5. Detect release PRs by checking if title contains "release" or "chore: release"
 6. Workflow status can be: "completed", "in_progress", "queued", "waiting", etc.
 7. If conclusion is null, the workflow is still running
-8. DO NOT wrap JSON in markdown code fences or add any explanatory text
+8. **CRITICAL**: Include headRefOid for each PR and headSha for each workflow run to enable PR-to-workflow matching
+9. **CRITICAL**: Rename PR's "branch" field to "headRefName" to match gh CLI output
+10. DO NOT wrap JSON in markdown code fences or add any explanatory text
 
 </OUTPUT_FORMAT>

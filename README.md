@@ -9,11 +9,12 @@ AI-powered GitHub management for OSDU SPI services. Chat with your repositories 
 
 SPI Agent provides a conversational interface for managing GitHub **Issues**, **Pull Requests**, **Workflows**, and **Code Scanning** across OSDU SPI service repositories. With Maven MCP integration, gain powerful **dependency management** and **security scanning** capabilities. Perform comprehensive GitHub and Maven operations without leaving your terminal.
 
-**21+ Tools Available:**
-- 🐛 **Issues**: List, read, create, update, comment, search
+**28+ Tools Available:**
+- 🐛 **Issues**: List, read, create, update, comment, search, **assign to Copilot**
 - 🔀 **Pull Requests**: List, read, create, update, merge, comment
-- ⚙️ **Workflows**: List, monitor runs, trigger, cancel
+- ⚙️ **Workflows**: List, monitor runs, trigger, cancel, **detect approval required**
 - 🔒 **Code Scanning**: List security alerts, get vulnerability details
+- 📁 **File System**: List files, read contents, search patterns, parse POMs, find dependency versions
 - 📦 **Maven Dependencies** (optional): Version checks, vulnerability scanning, triage analysis
 
 ```bash
@@ -48,6 +49,26 @@ Agent: -- Custom workflow results --
 
 You: /test partition
 Agent: -- Maven test results --
+
+You: The latest os-core-lib-azure version is 2.2.6. Locate services that aren't at the latest version.
+Agent: Found 3 reference(s) to org.opengroup.osdu:os-core-lib-azure:
+
+       Service: file
+         repos/file/providers/azure/pom.xml
+           Version: ${os-core-lib-azure.version} → 2.2.5
+           Location: dependencies
+
+       Service: partition
+         repos/partition/providers/azure/pom.xml
+           Version: 2.2.6
+           Location: dependencies
+
+       Service: legal
+         repos/legal/providers/azure/pom.xml
+           Version: 2.2.4
+           Location: dependencies
+
+       Services not at version 2.2.6: file (2.2.5), legal (2.2.4)
 ```
 
 ## Prerequisites

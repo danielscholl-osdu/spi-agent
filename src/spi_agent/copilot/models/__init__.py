@@ -20,6 +20,7 @@ class IssueInfo(BaseModel):
     title: str
     labels: List[str] = Field(default_factory=list)
     state: str
+    assignees: List[str] = Field(default_factory=list)
 
 
 class IssuesData(BaseModel):
@@ -35,7 +36,9 @@ class PullRequestInfo(BaseModel):
     number: int
     title: str
     state: str
-    branch: str = Field(alias="headRefName", default="")
+    headRefName: str = ""
+    headRefOid: str = ""
+    author: str = ""
     is_draft: bool = Field(alias="isDraft", default=False)
     is_release: bool = False
 
@@ -53,6 +56,7 @@ class WorkflowRun(BaseModel):
     name: str
     status: str
     conclusion: Optional[str] = None
+    headSha: str = ""
     created_at: str = Field(alias="createdAt", default="")
     updated_at: str = Field(alias="updatedAt", default="")
 

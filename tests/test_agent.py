@@ -13,10 +13,15 @@ def test_agent(test_config: AgentConfig) -> SPIAgent:
     """Create a test agent instance with mocked dependencies."""
     with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
         "spi_agent.agent.create_github_tools"
-    ) as mock_tools, patch("spi_agent.agent.ChatAgent") as mock_chat_agent:
+    ) as mock_github_tools, patch(
+        "spi_agent.agent.create_filesystem_tools"
+    ) as mock_fs_tools, patch(
+        "spi_agent.agent.ChatAgent"
+    ) as mock_chat_agent:
 
-        # Mock GitHub tools
-        mock_tools.return_value = []
+        # Mock GitHub and filesystem tools
+        mock_github_tools.return_value = []
+        mock_fs_tools.return_value = []
 
         # Mock ChatAgent
         mock_agent_instance = Mock()
@@ -33,11 +38,12 @@ def test_agent_initialization():
     """Test agent initialization with default config."""
     with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
         "spi_agent.agent.create_github_tools"
-    ), patch("spi_agent.agent.ChatAgent"):
+    ), patch("spi_agent.agent.create_filesystem_tools"), patch("spi_agent.agent.ChatAgent"):
         agent = SPIAgent()
 
         assert agent.config is not None
         assert agent.github_tools is not None
+        assert agent.filesystem_tools is not None
         assert agent.agent is not None
 
 
@@ -45,7 +51,7 @@ def test_agent_initialization_with_custom_config(test_config: AgentConfig):
     """Test agent initialization with custom config."""
     with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
         "spi_agent.agent.create_github_tools"
-    ), patch("spi_agent.agent.ChatAgent"):
+    ), patch("spi_agent.agent.create_filesystem_tools"), patch("spi_agent.agent.ChatAgent"):
         agent = SPIAgent(config=test_config)
 
         assert agent.config.organization == "test-org"
@@ -76,7 +82,7 @@ def test_agent_instructions_include_repos(test_config: AgentConfig):
     """Test that agent instructions include repository information."""
     with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
         "spi_agent.agent.create_github_tools"
-    ), patch("spi_agent.agent.ChatAgent") as mock_chat_agent:
+    ), patch("spi_agent.agent.create_filesystem_tools"), patch("spi_agent.agent.ChatAgent") as mock_chat_agent:
         agent = SPIAgent(config=test_config)
 
         # Verify instructions mention the organization and repos
@@ -85,22 +91,28 @@ def test_agent_instructions_include_repos(test_config: AgentConfig):
 
 
 def test_agent_has_required_tools():
-    """Test that agent is initialized with GitHub tools."""
+    """Test that agent is initialized with GitHub and filesystem tools."""
     with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
         "spi_agent.agent.create_github_tools"
-    ) as mock_create_tools, patch("spi_agent.agent.ChatAgent") as mock_chat_agent:
+    ) as mock_create_github_tools, patch(
+        "spi_agent.agent.create_filesystem_tools"
+    ) as mock_create_fs_tools, patch(
+        "spi_agent.agent.ChatAgent"
+    ) as mock_chat_agent:
 
         # Mock tools
-        mock_tools = [Mock(), Mock(), Mock()]
-        mock_create_tools.return_value = mock_tools
+        github_tools = [Mock(), Mock(), Mock()]
+        fs_tools = [Mock(), Mock()]
+        mock_create_github_tools.return_value = github_tools
+        mock_create_fs_tools.return_value = fs_tools
 
         agent = SPIAgent()
 
-        # Verify ChatAgent was called with tools
+        # Verify ChatAgent was called with combined tools
         mock_chat_agent.assert_called_once()
         call_kwargs = mock_chat_agent.call_args[1]
 
-        assert call_kwargs["tools"] == mock_tools
+        assert call_kwargs["tools"] == github_tools + fs_tools
         assert call_kwargs["name"] == "SPI GitHub Issues Agent"
 
 
@@ -108,12 +120,18 @@ def test_agent_with_mcp_tools():
     """Test that agent can be initialized with MCP tools."""
     with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
         "spi_agent.agent.create_github_tools"
-    ) as mock_create_tools, patch("spi_agent.agent.ChatAgent") as mock_chat_agent:
+    ) as mock_create_github_tools, patch(
+        "spi_agent.agent.create_filesystem_tools"
+    ) as mock_create_fs_tools, patch(
+        "spi_agent.agent.ChatAgent"
+    ) as mock_chat_agent:
 
-        # Mock GitHub and MCP tools
+        # Mock GitHub, filesystem, and MCP tools
         github_tools = [Mock(), Mock()]
+        fs_tools = [Mock()]
         mcp_tools = [Mock()]
-        mock_create_tools.return_value = github_tools
+        mock_create_github_tools.return_value = github_tools
+        mock_create_fs_tools.return_value = fs_tools
 
         agent = SPIAgent(mcp_tools=mcp_tools)
 
@@ -121,16 +139,16 @@ def test_agent_with_mcp_tools():
         mock_chat_agent.assert_called_once()
         call_kwargs = mock_chat_agent.call_args[1]
 
-        # Should have both GitHub and MCP tools
-        assert len(call_kwargs["tools"]) == 3
-        assert call_kwargs["tools"] == github_tools + mcp_tools
+        # Should have GitHub, filesystem, and MCP tools
+        assert len(call_kwargs["tools"]) == 4
+        assert call_kwargs["tools"] == github_tools + fs_tools + mcp_tools
 
 
 def test_agent_instructions_include_maven_capabilities(test_config: AgentConfig):
     """Test that agent instructions include Maven MCP capabilities."""
     with patch("spi_agent.agent.AzureOpenAIResponsesClient"), patch(
         "spi_agent.agent.create_github_tools"
-    ), patch("spi_agent.agent.ChatAgent"):
+    ), patch("spi_agent.agent.create_filesystem_tools"), patch("spi_agent.agent.ChatAgent"):
         agent = SPIAgent(config=test_config)
 
         # Verify instructions mention Maven capabilities
