@@ -24,7 +24,7 @@ class TestRunner(BaseRunner):
         self,
         prompt_file: Union[Path, Traversable],
         services: List[str],
-        provider: str = "azure",
+        provider: str = "core,core-plus,azure",
     ):
         super().__init__(prompt_file, services)
         self.provider = provider
@@ -47,6 +47,12 @@ class TestRunner(BaseRunner):
             logging.Formatter('[%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s] %(message)s')
         )
         self.logger.addHandler(file_handler)
+
+        # Track current Maven module being built (for per-profile test count parsing)
+        self.current_module = None
+
+        # Track current service for structured test results parsing
+        self.current_test_service = None
 
     @property
     def log_prefix(self) -> str:
@@ -71,6 +77,33 @@ class TestRunner(BaseRunner):
             # Single provider
             return [provider]
 
+    def _extract_profile_from_module(self, module_name: str) -> str:
+        """Extract profile name from Maven module name.
+
+        Args:
+            module_name: Maven module name (e.g., "partition-core", "entitlements-v2-azure")
+
+        Returns:
+            Profile name (e.g., "core", "azure") or None if not recognized
+        """
+        module_lower = module_name.lower()
+
+        # Check for each profile in order of specificity (core-plus before core)
+        if "core-plus" in module_lower or "coreplus" in module_lower:
+            return "core-plus"
+        elif "-core" in module_lower or module_lower.endswith("core"):
+            return "core"
+        elif "azure" in module_lower:
+            return "azure"
+        elif "aws" in module_lower:
+            return "aws"
+        elif "gc" in module_lower or "gcp" in module_lower:
+            return "gc"
+        elif "ibm" in module_lower:
+            return "ibm"
+
+        return None
+
     def load_prompt(self) -> str:
         """Load and augment prompt with arguments"""
         prompt = self.prompt_file.read_text(encoding="utf-8")
@@ -87,23 +120,94 @@ class TestRunner(BaseRunner):
     def show_config(self):
         """Display run configuration"""
         if len(self.profiles) > 1:
-            profiles_str = ', '.join(self.profiles)
+            # Convert "core-plus" to "core+" for display
+            profiles_display = [p if p != "core-plus" else "core+" for p in self.profiles]
+            profiles_str = ', '.join(profiles_display)
             config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
 [cyan]Profiles:[/cyan]   {profiles_str}"""
         else:
+            # Convert "core-plus" to "core+" for display
+            provider_display = self.provider.replace("core-plus", "core+")
             config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
-[cyan]Provider:[/cyan]   {self.provider}"""
+[cyan]Provider:[/cyan]   {provider_display}"""
 
         console.print(Panel(config_text, title="🧪 Maven Test Execution", border_style="blue"))
         console.print()
 
     def parse_output(self, line: str) -> None:
-        """Parse copilot's task announcements for test status updates"""
+        """Parse copilot's task announcements and Maven build output for test status updates"""
         line_lower = line.lower()
         line_stripped = line.strip()
 
-        # Strategy: Only parse copilot's task announcements, not raw Maven output
-        # Copilot tells us everything we need through its task markers
+        # PRIORITY 0: Parse structured test results blocks (NEW FORMAT)
+        # Pattern: [TEST_RESULTS:service]
+        #          profile=azure,tests_run=61,failures=0,errors=0,skipped=0
+        #          [/TEST_RESULTS]
+        if line_stripped.startswith("[TEST_RESULTS:"):
+            # Extract service name from [TEST_RESULTS:service]
+            match = re.match(r'\[TEST_RESULTS:(\w+)\]', line_stripped)
+            if match:
+                self.current_test_service = match.group(1)
+                self.logger.debug(f"Detected structured test results block for: {self.current_test_service}")
+                return
+
+        # Parse structured test result lines
+        if hasattr(self, 'current_test_service') and self.current_test_service:
+            if line_stripped == "[/TEST_RESULTS]":
+                self.logger.debug(f"End of test results block for: {self.current_test_service}")
+                # Aggregate profile data if in multi-profile mode
+                if len(self.profiles) > 1:
+                    self.tracker._aggregate_profile_data(self.current_test_service)
+                self.current_test_service = None
+                return
+
+            # Parse: profile=azure,tests_run=61,failures=0,errors=0,skipped=0
+            result_match = re.match(r'profile=(\w+(?:-\w+)?),tests_run=(\d+),failures=(\d+),errors=(\d+),skipped=(\d+)', line_stripped)
+            if result_match:
+                profile = result_match.group(1)
+                tests_run = int(result_match.group(2))
+                failures = int(result_match.group(3))
+                errors = int(result_match.group(4))
+                skipped = int(result_match.group(5))
+                tests_failed = failures + errors
+
+                self.logger.info(f"[{self.current_test_service}:{profile}] Structured test results: {tests_run} tests run, {tests_failed} failed")
+
+                # Determine status based on failures
+                status = "test_failed" if tests_failed > 0 else "test_success"
+
+                # Update tracker with structured test counts
+                if len(self.profiles) > 1 and profile in self.profiles:
+                    # Multi-profile mode: update profile-specific data
+                    self.tracker.update(self.current_test_service, status, f"{tests_run} tests",
+                                      phase="test", profile=profile, tests_run=tests_run, tests_failed=tests_failed)
+                elif len(self.profiles) == 1:
+                    # Single-profile mode: update service-level data
+                    self.tracker.update(self.current_test_service, status, f"{tests_run} tests",
+                                      phase="test", tests_run=tests_run, tests_failed=tests_failed)
+                return
+
+            # Parse optional failed test names
+            # Single-profile: failed_tests=TestA,TestB,TestC
+            # Multi-profile: failed_tests[profile]=TestA,TestB,TestC
+            failed_match = re.match(r'failed_tests(?:\[(\w+(?:-\w+)?)\])?=(.+)', line_stripped)
+            if failed_match:
+                profile = failed_match.group(1)  # May be None for single-profile
+                failed_tests = failed_match.group(2).split(',')
+
+                self.logger.info(f"[{self.current_test_service}:{profile or 'default'}] Failed tests: {failed_tests}")
+
+                # Store failed test names for future display (optional enhancement)
+                # For now, just log them
+                return
+
+        # PRIORITY 1: Track Maven module being built (for fallback per-profile test counts)
+        # Pattern: "[INFO] Building partition-core 0.29.0-SNAPSHOT"
+        building_match = re.search(r'\[INFO\]\s+Building\s+([\w\-]+)', line)
+        if building_match:
+            self.current_module = building_match.group(1)
+            self.logger.debug(f"Detected Maven module: {self.current_module}")
+            return
 
         # Find which service this line is about
         target_service = None
@@ -115,6 +219,41 @@ class TestRunner(BaseRunner):
 
         if not target_service:
             return
+
+        # PRIORITY 1: Parse Maven module test results (per-profile, from "Results:" section)
+        # Pattern: "[INFO] Tests run: 61, Failures: 0, Errors: 0, Skipped: 0" in Results section
+        # Only parse if we have tracked a current module and are in multi-profile mode
+        if self.current_module and len(self.profiles) > 1:
+            # Check if this is a Results summary line (not individual test output)
+            # Results summaries appear in the "Results:" section after all tests complete
+            maven_result_match = re.search(r'\[INFO\]\s+Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)', line)
+            if maven_result_match:
+                # Extract profile from current module name
+                profile = self._extract_profile_from_module(self.current_module)
+
+                if profile and profile in self.profiles:
+                    tests_run = int(maven_result_match.group(1))
+                    tests_failed = int(maven_result_match.group(2)) + int(maven_result_match.group(3))
+
+                    # Update tracker with profile-specific test count
+                    self.logger.debug(f"[{target_service}:{profile}] Detected Maven test results for module {self.current_module}: {tests_run} tests run, {tests_failed} failed")
+                    self.tracker.update(target_service, "test_success", f"{tests_run} tests",
+                                      phase="test", profile=profile, tests_run=tests_run, tests_failed=tests_failed)
+                    return
+
+        # PRIORITY 2: Parse actual Maven test output for single-profile mode (reliable, deterministic)
+        # Maven Surefire always outputs: "Tests run: X, Failures: Y, Errors: Z, Skipped: N"
+        if len(self.profiles) == 1:
+            maven_test_match = re.search(r'Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)', line)
+            if maven_test_match:
+                tests_run = int(maven_test_match.group(1))
+                tests_failed = int(maven_test_match.group(2)) + int(maven_test_match.group(3))
+
+                # Update tracker immediately when Maven reports test results
+                self.logger.debug(f"[{target_service}] Detected Maven test output: {tests_run} tests run, {tests_failed} failed")
+                self.tracker.update(target_service, "test_success", f"{tests_run} tests",
+                                  phase="test", tests_run=tests_run, tests_failed=tests_failed)
+                return
 
         # Parse copilot's status updates (matches the exact format from test.md prompt)
         # Strip leading bullets (● prefix)
@@ -138,12 +277,22 @@ class TestRunner(BaseRunner):
                 self.tracker.update(target_service, "coverage", "Coverage", phase="coverage")
 
             elif "compiled successfully" in line_lower:
-                # Completion summary - extract test count
-                test_count_match = re.search(r'(\d+)\s+tests?\s+passed', line_lower)
-                tests_run = int(test_count_match.group(1)) if test_count_match else 0
+                # PRIORITY 2: Parse AI summary (fallback for compatibility)
+                # Only update if we don't already have test count from Maven output
+                current_tests = self.tracker.services[target_service]["tests_run"]
 
-                self.tracker.update(target_service, "test_success", "Complete",
-                                  phase="coverage", tests_run=tests_run, tests_failed=0)
+                if current_tests == 0:
+                    # Extract test count from AI summary as fallback
+                    test_count_match = re.search(r'(\d+)\s+tests?\s+passed', line_lower)
+                    tests_run = int(test_count_match.group(1)) if test_count_match else 0
+
+                    self.logger.debug(f"[{target_service}] Using AI summary test count as fallback: {tests_run} tests")
+                    self.tracker.update(target_service, "test_success", "Complete",
+                                      phase="coverage", tests_run=tests_run, tests_failed=0)
+                else:
+                    # Maven already provided test count, just update phase
+                    self.logger.debug(f"[{target_service}] Maven test count already captured ({current_tests}), skipping AI summary")
+                    self.tracker.update(target_service, "test_success", "Complete", phase="coverage")
 
         # Detect errors
         if "build failure" in line_lower and target_service:
@@ -175,7 +324,7 @@ class TestRunner(BaseRunner):
 
             layout = self.create_layout()
             layout["status"].update(self.tracker.get_table())
-            layout["output"].update(self.get_output_panel())
+            layout["output"].update(self._output_panel_renderable)
 
             with Live(layout, console=console, refresh_per_second=2) as live:
                 if process.stdout:
@@ -190,14 +339,17 @@ class TestRunner(BaseRunner):
                             old_status = dict(self.tracker.services)
                             self.parse_output(line)
 
-                            # Only update display if status changed or every 10 lines
+                            # Update output panel every line (deque handles scrolling)
+                            # Only update status table if status changed or every 10 lines
                             status_changed = old_status != self.tracker.services
                             last_update += 1
 
                             if status_changed or last_update >= 10:
                                 layout["status"].update(self.tracker.get_table())
-                                layout["output"].update(self.get_output_panel())
                                 last_update = 0
+
+                            # Always update output to show new lines in scrolling window
+                            layout["output"].update(self._output_panel_renderable)
 
                 process.wait()
 
@@ -254,6 +406,107 @@ class TestRunner(BaseRunner):
         finally:
             current_process = None
 
+    def _map_profile_to_modules(self, service: str, base_path: Path, profile: str) -> List[Path]:
+        """
+        Map a profile to its corresponding Maven module directories.
+
+        This method detects which module directories belong to a specific profile
+        by examining the directory structure and naming conventions.
+
+        Args:
+            service: Service name
+            base_path: Base path to search for modules
+            profile: Profile name (e.g., "core", "azure", "core-plus")
+
+        Returns:
+            List of Path objects pointing to module directories that match the profile
+        """
+        module_paths = []
+        profile_lower = profile.lower()
+        profile_normalized = profile_lower.replace("-", "")
+
+        self.logger.debug(f"[{service}:{profile}] Mapping profile to module directories in {base_path}")
+
+        # Pattern 1: {service}-{profile}/ (e.g., partition-core/, partition-azure/)
+        direct_module = base_path / f"{service}-{profile}"
+        if direct_module.exists() and direct_module.is_dir():
+            self.logger.debug(f"[{service}:{profile}] Found direct module: {direct_module.name}")
+            module_paths.append(direct_module)
+
+        # Pattern 2: providers/{service}-{profile}/ (e.g., providers/partition-azure/)
+        providers_module = base_path / "providers" / f"{service}-{profile}"
+        if providers_module.exists() and providers_module.is_dir():
+            self.logger.debug(f"[{service}:{profile}] Found providers module: {providers_module.name}")
+            module_paths.append(providers_module)
+
+        # Pattern 3: provider/{service}-{profile}/ (singular "provider")
+        provider_module = base_path / "provider" / f"{service}-{profile}"
+        if provider_module.exists() and provider_module.is_dir():
+            self.logger.debug(f"[{service}:{profile}] Found provider module: {provider_module.name}")
+            module_paths.append(provider_module)
+
+        # Pattern 4: Check all subdirectories for matching names
+        # This handles variations like: core/, partition-core-plus/, etc.
+        for item in base_path.iterdir():
+            if not item.is_dir() or item.name in ["target", "src", ".git", "provider", "providers"]:
+                continue
+
+            item_normalized = item.name.lower().replace("-", "")
+
+            # Match if profile name appears in directory name
+            if profile == "core-plus":
+                # Special handling: only match if "coreplus" or "core-plus" in name
+                if "coreplus" in item_normalized or "core-plus" in item.name.lower():
+                    if item not in module_paths:
+                        self.logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
+                        module_paths.append(item)
+            elif profile == "core":
+                # Core should not match core-plus
+                if "core" in item_normalized and "coreplus" not in item_normalized:
+                    if item not in module_paths:
+                        self.logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
+                        module_paths.append(item)
+            else:
+                # Regular profile matching
+                if profile_normalized in item_normalized:
+                    if item not in module_paths:
+                        self.logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
+                        module_paths.append(item)
+
+        # Pattern 5: Check providers/ and provider/ subdirectories
+        for provider_dir in [base_path / "providers", base_path / "provider"]:
+            if not provider_dir.exists():
+                continue
+
+            for item in provider_dir.iterdir():
+                if not item.is_dir():
+                    continue
+
+                item_normalized = item.name.lower().replace("-", "")
+
+                if profile == "core-plus":
+                    if "coreplus" in item_normalized or "core-plus" in item.name.lower():
+                        if item not in module_paths:
+                            self.logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
+                            module_paths.append(item)
+                elif profile == "core":
+                    if "core" in item_normalized and "coreplus" not in item_normalized:
+                        if item not in module_paths:
+                            self.logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
+                            module_paths.append(item)
+                else:
+                    if profile_normalized in item_normalized:
+                        if item not in module_paths:
+                            self.logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
+                            module_paths.append(item)
+
+        if module_paths:
+            self.logger.info(f"[{service}:{profile}] Mapped profile to {len(module_paths)} module(s): {[p.name for p in module_paths]}")
+        else:
+            self.logger.warning(f"[{service}:{profile}] No module directories found for profile")
+
+        return module_paths
+
     def _extract_coverage_from_csv(self, service: str, base_path: Path, profile: str = None) -> tuple[float, float]:
         """
         Extract coverage data from JaCoCo CSV reports.
@@ -266,44 +519,83 @@ class TestRunner(BaseRunner):
             base_path: Base path to search for coverage reports
             profile: Optional profile name to filter coverage by module
         """
-        # Search for jacoco.csv in multiple locations
-        csv_paths = [
-            base_path / "target" / "site" / "jacoco" / "jacoco.csv",
-        ]
+        profile_prefix = f"[{service}:{profile}] " if profile else f"[{service}] "
 
-        # Also check provider-specific subdirectories
-        provider_dir = base_path / "provider"
-        if provider_dir.exists():
-            for subdir in provider_dir.iterdir():
-                if subdir.is_dir():
-                    csv_paths.append(subdir / "target" / "site" / "jacoco" / "jacoco.csv")
+        # Strategy: For profile-specific extraction, prioritize per-module CSV files
+        # This is more reliable than filtering aggregated CSV rows
+        csv_paths = []
 
-        # Check for multi-module structures
-        for item in base_path.iterdir():
-            if item.is_dir() and item.name not in ["target", "src", ".git", "provider"]:
-                potential_csv = item / "target" / "site" / "jacoco" / "jacoco.csv"
-                if potential_csv not in csv_paths:
-                    csv_paths.append(potential_csv)
+        if profile:
+            # Profile-specific mode: Find CSV files from modules that match this profile
+            self.logger.info(f"{profile_prefix}Starting profile-specific coverage extraction")
+
+            # Map profile to module directories
+            module_dirs = self._map_profile_to_modules(service, base_path, profile)
+
+            if module_dirs:
+                # Read CSV from each matched module
+                for module_dir in module_dirs:
+                    module_csv = module_dir / "target" / "site" / "jacoco" / "jacoco.csv"
+                    if module_csv.exists():
+                        csv_paths.append((module_csv, f"module:{module_dir.name}"))
+                        self.logger.debug(f"{profile_prefix}Queued module CSV: {module_csv} (source: {module_dir.name})")
+                    else:
+                        self.logger.warning(f"{profile_prefix}Module {module_dir.name} has no jacoco.csv at expected location")
+
+            # Fallback: If no module-specific CSVs found, try filtering aggregated CSV
+            if not csv_paths:
+                self.logger.warning(f"{profile_prefix}No module-specific CSVs found, falling back to aggregated CSV filtering")
+                aggregated_csv = base_path / "target" / "site" / "jacoco" / "jacoco.csv"
+                if aggregated_csv.exists():
+                    csv_paths.append((aggregated_csv, "aggregated:filtered"))
+                    self.logger.debug(f"{profile_prefix}Using aggregated CSV with row filtering: {aggregated_csv}")
+        else:
+            # Service-level mode: Collect all CSV files
+            self.logger.info(f"{profile_prefix}Starting service-level coverage extraction")
+
+            # Parent/aggregated report
+            aggregated_csv = base_path / "target" / "site" / "jacoco" / "jacoco.csv"
+            if aggregated_csv.exists():
+                csv_paths.append((aggregated_csv, "aggregated"))
+
+            # Provider subdirectories
+            provider_dir = base_path / "provider"
+            if provider_dir.exists():
+                for subdir in provider_dir.iterdir():
+                    if subdir.is_dir():
+                        subdir_csv = subdir / "target" / "site" / "jacoco" / "jacoco.csv"
+                        if subdir_csv.exists():
+                            csv_paths.append((subdir_csv, f"provider:{subdir.name}"))
+
+            # Multi-module structures
+            for item in base_path.iterdir():
+                if item.is_dir() and item.name not in ["target", "src", ".git", "provider", "providers"]:
+                    item_csv = item / "target" / "site" / "jacoco" / "jacoco.csv"
+                    if item_csv.exists() and (item_csv, f"module:{item.name}") not in csv_paths:
+                        csv_paths.append((item_csv, f"module:{item.name}"))
+
+        self.logger.info(f"{profile_prefix}Found {len(csv_paths)} CSV file(s) to process")
 
         total_line_covered = 0
         total_line_missed = 0
         total_branch_covered = 0
         total_branch_missed = 0
         files_parsed = 0
+        rows_matched = 0
+        rows_skipped = 0
 
-        for csv_path in csv_paths:
-            if not csv_path.exists():
-                continue
-
+        for csv_path, csv_source in csv_paths:
             try:
-                profile_prefix = f"[{service}:{profile}] " if profile else f"[{service}] "
-                self.logger.debug(f"{profile_prefix}Found CSV report: {csv_path}")
+                self.logger.debug(f"{profile_prefix}Processing CSV: {csv_path} (source: {csv_source})")
                 content = csv_path.read_text(encoding='utf-8')
                 lines = content.strip().split('\n')
 
                 if len(lines) < 2:
-                    self.logger.debug(f"{profile_prefix}CSV file is empty or has no data rows")
+                    self.logger.warning(f"{profile_prefix}CSV file is empty or has no data rows: {csv_path}")
                     continue
+
+                csv_rows_matched = 0
+                csv_rows_skipped = 0
 
                 # Skip header row, parse data rows
                 for i, line in enumerate(lines[1:], start=2):
@@ -313,37 +605,33 @@ class TestRunner(BaseRunner):
                     parts = line.split(',')
                     if len(parts) < 9:
                         self.logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}: insufficient columns")
+                        csv_rows_skipped += 1
                         continue
 
-                    # If profile filtering is enabled, check if this row matches the profile
-                    if profile:
+                    # Profile filtering: only apply for aggregated CSV sources
+                    if profile and "aggregated:filtered" in csv_source:
                         # CSV columns: GROUP,PACKAGE,CLASS,...
                         group = parts[0].lower()
                         package = parts[1].lower()
 
-                        # Profile matching logic:
-                        # - Check if group or package contains profile name
-                        # - Examples: "partition-azure", "partition.azure", "provider.partition-azure"
-                        # - Also handle: "core", "core-plus"
                         profile_normalized = profile.lower().replace("-", "")
                         module_path = f"{group}.{package}"
 
-                        # Check for profile match
+                        # Check for profile match using improved logic
+                        matched = False
                         if profile == "core-plus":
-                            # Special handling for core-plus
-                            if "coreplus" not in module_path and "core-plus" not in module_path:
-                                continue
-                        elif profile == "core":
-                            # Core should not match core-plus
                             if "coreplus" in module_path or "core-plus" in module_path:
-                                continue
-                            # Must have "core" but not as part of "coreplus"
-                            if "core" not in module_path:
-                                continue
+                                matched = True
+                        elif profile == "core":
+                            if "core" in module_path and "coreplus" not in module_path and "core-plus" not in module_path:
+                                matched = True
                         else:
-                            # Regular profile matching
-                            if profile_normalized not in module_path.replace("-", ""):
-                                continue
+                            if profile_normalized in module_path.replace("-", ""):
+                                matched = True
+
+                        if not matched:
+                            csv_rows_skipped += 1
+                            continue
 
                     try:
                         # CSV columns: GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,
@@ -357,16 +645,24 @@ class TestRunner(BaseRunner):
                         total_line_missed += line_missed
                         total_branch_covered += branch_covered
                         total_branch_missed += branch_missed
+                        csv_rows_matched += 1
 
                     except (ValueError, IndexError) as e:
                         self.logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}: {e}")
+                        csv_rows_skipped += 1
                         continue
 
                 files_parsed += 1
-                self.logger.debug(f"{profile_prefix}Parsed CSV with totals - Lines: {total_line_covered}/{total_line_missed}, Branches: {total_branch_covered}/{total_branch_missed}")
+                rows_matched += csv_rows_matched
+                rows_skipped += csv_rows_skipped
+
+                self.logger.info(f"{profile_prefix}Parsed {csv_path.name} ({csv_source}): {csv_rows_matched} rows matched, {csv_rows_skipped} rows skipped")
+                self.logger.debug(f"{profile_prefix}Running totals - Lines: {total_line_covered} covered / {total_line_missed} missed, Branches: {total_branch_covered} covered / {total_branch_missed} missed")
 
             except Exception as e:
-                self.logger.debug(f"{profile_prefix}Failed to parse CSV at {csv_path}: {e}")
+                self.logger.error(f"{profile_prefix}Failed to parse CSV at {csv_path}: {e}")
+                import traceback
+                self.logger.debug(f"{profile_prefix}Traceback: {traceback.format_exc()}")
                 continue
 
         # Calculate percentages
@@ -379,11 +675,18 @@ class TestRunner(BaseRunner):
         if total_branch_covered + total_branch_missed > 0:
             branch_cov = (total_branch_covered / (total_branch_covered + total_branch_missed)) * 100
 
-        profile_prefix = f"[{service}:{profile}] " if profile else f"[{service}] "
+        # Log results with detailed diagnostics
         if files_parsed > 0:
-            self.logger.debug(f"{profile_prefix}CSV parsing succeeded: {line_cov:.1f}% line, {branch_cov:.1f}% branch coverage")
+            self.logger.info(f"{profile_prefix}✓ CSV parsing succeeded: {line_cov:.1f}% line, {branch_cov:.1f}% branch coverage from {files_parsed} file(s), {rows_matched} rows")
         else:
-            self.logger.debug(f"{profile_prefix}No CSV files found or parsed")
+            self.logger.warning(f"{profile_prefix}✗ No CSV files found or successfully parsed")
+
+        # Validation: warn if we found CSV files but got 0% coverage
+        if files_parsed > 0 and line_cov == 0 and branch_cov == 0 and rows_matched == 0:
+            if profile and rows_skipped > 0:
+                self.logger.error(f"{profile_prefix}VALIDATION FAILURE: Found {files_parsed} CSV file(s) with {rows_skipped} rows, but profile filtering returned 0 matches. This indicates a module naming mismatch.")
+            else:
+                self.logger.warning(f"{profile_prefix}VALIDATION WARNING: CSV files exist but contain no coverage data. JaCoCo may not be configured or tests may not have run.")
 
         return (line_cov, branch_cov)
 
@@ -554,7 +857,11 @@ class TestRunner(BaseRunner):
             Tuple of (grade, label, recommendations)
         """
         # Determine quality grade
-        if line_cov >= 90 and branch_cov >= 85:
+        # Don't grade if no coverage data (likely missing plugin or no tests)
+        if line_cov == 0 and branch_cov == 0:
+            grade = None
+            label = "No Coverage Data"
+        elif line_cov >= 90 and branch_cov >= 85:
             grade = "A"
             label = "Excellent"
         elif line_cov >= 80 and branch_cov >= 70:
@@ -566,9 +873,6 @@ class TestRunner(BaseRunner):
         elif line_cov >= 60 and branch_cov >= 50:
             grade = "D"
             label = "Needs Improvement"
-        elif line_cov == 0 and branch_cov == 0:
-            grade = "F"
-            label = "No Coverage"
         else:
             grade = "F"
             label = "Poor"
@@ -698,7 +1002,11 @@ class TestRunner(BaseRunner):
         worst_grade_value = 6
         grade_values = {"A": 5, "B": 4, "C": 3, "D": 2, "F": 1}
 
+        service_count = 0
+        total_services = len(self.tracker.services)
+
         for service, data in self.tracker.services.items():
+            service_count += 1
             # Get service-level metrics
             svc_line_cov = data["coverage_line"]
             svc_branch_cov = data["coverage_branch"]
@@ -707,18 +1015,21 @@ class TestRunner(BaseRunner):
             if svc_grade and grade_values.get(svc_grade, 0) < worst_grade_value:
                 worst_grade_value = grade_values[svc_grade]
 
-            # Determine service-level result
-            if data["status"] == "test_failed":
-                result_text = Text(f"Failed ({data['tests_failed']}/{data['tests_run']} tests)", style="red")
-                svc_grade_text = Text("—", style="dim")
+            # Determine service-level result with better failure visibility
+            if data["status"] == "test_failed" or data["tests_failed"] > 0:
+                # Show test failures prominently
+                passed = data["tests_run"] - data["tests_failed"]
+                result_text = Text(f"{data['tests_failed']} failed / {passed} passed", style="red bold")
+                svc_grade_text = Text("FAIL", style="red bold")
                 svc_rec = "Fix test failures"
             elif data["status"] == "compile_failed":
-                result_text = Text("Compile Failed", style="red")
+                result_text = Text("Compile Failed", style="red bold")
                 svc_grade_text = Text("—", style="dim")
                 svc_rec = "Fix compilation errors"
             elif svc_grade:
-                result_text = Text(f"Cov: {svc_line_cov}%/{svc_branch_cov}%",
-                                 style="green" if svc_grade in ["A", "B"] else "yellow" if svc_grade == "C" else "red")
+                # All tests passed, show coverage (no test count or "cov" suffix - already clear from context)
+                result_text = Text(f"{svc_line_cov}%/{svc_branch_cov}%",
+                                 style="green" if svc_grade in ["A", "B"] else "yellow" if svc_grade == "C" else "orange1")
                 grade_style = {"A": "green bold", "B": "blue bold", "C": "yellow bold",
                               "D": "red bold", "F": "red bold"}.get(svc_grade, "white")
                 svc_grade_text = Text(svc_grade, style=grade_style)
@@ -747,18 +1058,35 @@ class TestRunner(BaseRunner):
                         continue
 
                     profile_data = profiles[profile_name]
+                    p_tests_run = profile_data.get("tests_run", 0)
+                    p_tests_failed = profile_data.get("tests_failed", 0)
                     p_line_cov = profile_data.get("coverage_line", 0)
                     p_branch_cov = profile_data.get("coverage_branch", 0)
                     p_grade = profile_data.get("quality_grade")
+
+                    # Display name: convert "core-plus" to "core+" for shorter display
+                    profile_display = "core+" if profile_name == "core-plus" else profile_name
 
                     # Track worst grade
                     if p_grade and grade_values.get(p_grade, 0) < worst_grade_value:
                         worst_grade_value = grade_values[p_grade]
 
-                    # Format profile result
-                    if p_grade:
-                        p_result = Text(f"Cov: {p_line_cov}%/{p_branch_cov}%",
-                                      style="green" if p_grade in ["A", "B"] else "yellow" if p_grade == "C" else "dim")
+                    # Format profile result with failure info
+                    if p_tests_failed > 0:
+                        # Profile has test failures
+                        p_passed = p_tests_run - p_tests_failed
+                        p_result = Text(f"{p_tests_failed}/{p_tests_run} failed", style="red")
+                        p_grade_text = Text("FAIL", style="red")
+                        p_rec = "Fix test failures in this profile"
+                    elif p_tests_run == 0 and p_line_cov == 0 and p_branch_cov == 0:
+                        # No data for this profile
+                        p_result = Text("No data", style="dim")
+                        p_grade_text = Text("—", style="dim")
+                        p_rec = profile_data.get("quality_label", "") if profile_data.get("quality_label") else ""
+                    elif p_grade:
+                        # Tests passed, show coverage only (test count in Status table)
+                        p_result = Text(f"{p_line_cov}%/{p_branch_cov}%",
+                                      style="green" if p_grade in ["A", "B"] else "yellow" if p_grade == "C" else "orange1")
                         p_grade_style = {"A": "green", "B": "blue", "C": "yellow",
                                         "D": "red", "F": "red"}.get(p_grade, "white")
                         p_grade_text = Text(p_grade, style=p_grade_style)
@@ -777,22 +1105,46 @@ class TestRunner(BaseRunner):
                         p_rec = ""
 
                     table.add_row(
-                        f"  ↳ {profile_name}",
-                        profile_name.capitalize(),
+                        f"  ↳ {profile_display}",
+                        profile_display,
                         p_result,
                         p_grade_text,
                         p_rec
                     )
 
-        # Determine border color based on worst grade
-        border_color_map = {5: "green", 4: "blue", 3: "yellow", 2: "red", 1: "red"}
-        border_color = border_color_map.get(worst_grade_value, "cyan")
+            # Add blank separator row between services (but not after the last service)
+            if service_count < total_services:
+                table.add_row("", "", "", "", "")
 
-        # Subtitle showing profile count
-        if self.profiles:
-            subtitle = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''} × {len(self.profiles)} profiles"
+        # Calculate summary statistics
+        total_tests = 0
+        total_failed = 0
+        total_passed = 0
+
+        for service_data in self.tracker.services.values():
+            total_tests += service_data["tests_run"]
+            total_failed += service_data["tests_failed"]
+
+        total_passed = total_tests - total_failed
+
+        # Determine border color based on failures and worst grade
+        if total_failed > 0:
+            border_color = "red"
         else:
-            subtitle = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''}"
+            border_color_map = {5: "green", 4: "blue", 3: "yellow", 2: "orange1", 1: "red"}
+            border_color = border_color_map.get(worst_grade_value, "cyan")
+
+        # Build subtitle with test summary
+        profile_info = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''} × {len(self.profiles)} profiles"
+
+        if total_tests > 0:
+            if total_failed > 0:
+                test_summary = f"{total_failed} failed / {total_passed} passed / {total_tests} total"
+            else:
+                test_summary = f"All {total_tests} tests passed"
+            subtitle = f"{profile_info} | {test_summary}"
+        else:
+            subtitle = profile_info
 
         return Panel(
             table,
@@ -882,7 +1234,7 @@ class TestRunner(BaseRunner):
 
             table.add_row(
                 service,
-                self.tracker.provider.capitalize(),
+                self.tracker.provider,
                 f"[{result_style}]{result}[/{result_style}]",
                 f"[{grade_style}]{grade}[/{grade_style}]" if grade else "",
                 recommendation
@@ -975,5 +1327,4 @@ class TestRunner(BaseRunner):
         else:
             # Single profile: use original quality panel
             return self.get_quality_panel()
-
 

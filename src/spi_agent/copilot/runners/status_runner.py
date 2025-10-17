@@ -588,7 +588,7 @@ class StatusRunner(BaseRunner):
             # Create split layout
             layout = self.create_layout()
             layout["status"].update(self.tracker.get_table())
-            layout["output"].update(self.get_output_panel())
+            layout["output"].update(self._output_panel_renderable)
 
             # Live display with split view
             with Live(layout, console=console, refresh_per_second=4) as live:
@@ -606,7 +606,7 @@ class StatusRunner(BaseRunner):
 
                             # Update both panels
                             layout["status"].update(self.tracker.get_table())
-                            layout["output"].update(self.get_output_panel())
+                            layout["output"].update(self._output_panel_renderable)
 
                 # Wait for process to complete
                 process.wait()
@@ -721,5 +721,4 @@ class StatusRunner(BaseRunner):
             title="✓ Status Check Complete" if return_code == 0 else "✗ Status Check Failed",
             border_style="green" if return_code == 0 else "red"
         )
-
 

@@ -132,7 +132,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             return "Usage: /test <services> [--provider <provider>]\nExample: /test partition --provider azure"
 
         services_arg = parts[1]
-        provider = "azure"  # Default to azure
+        provider = "core,core-plus,azure"  # Default to comprehensive core + azure coverage
 
         # Parse --provider flag
         if "--provider" in parts:
@@ -263,7 +263,7 @@ def _render_help() -> None:
 - `/fork partition --branch develop` - Fork with custom branch
 - `/status partition` - Check GitHub status for partition
 - `/status partition,legal` - Check status for multiple repos
-- `/test partition` - Run Maven tests (default: azure provider)
+- `/test partition` - Run Maven tests (default: core,core-plus,azure profiles)
 - `/test partition --provider aws` - Run tests with specific provider
 - `/triage partition` - Run dependency/vulnerability triage
 - `/triage partition --create-issue` - Run triage and create issues
@@ -477,8 +477,8 @@ Examples:
         test_parser.add_argument(
             "--provider",
             "-p",
-            default="azure",
-            help="Cloud provider(s): azure, aws, gc, ibm, core, all (default: azure)",
+            default="core,core-plus,azure",
+            help="Cloud provider(s): azure, aws, gc, ibm, core, all (default: core,core-plus,azure)",
         )
 
         triage_parser = subparsers.add_parser(

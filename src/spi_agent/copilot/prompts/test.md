@@ -3,7 +3,7 @@ ARGUMENTS:
         - Single service: partition
         - Multiple services: partition,entitlements,legal
         - All services: all
-    PROVIDER: (OPTIONAL) Cloud provider profile(s) to test (default: azure):
+    PROVIDER: (OPTIONAL) Cloud provider profile(s) to test (default: core,core-plus,azure):
         - Single provider: azure, aws, gc, ibm, core
         - Multiple providers: azure,aws
         - All providers: all
@@ -13,11 +13,12 @@ INSTRUCTIONS:
     2. If no SERVICES argument, process all services in SERVICE_LIST
     3. If SERVICES is a comma-separated list, only process those specific services
     4. If SERVICES is a single name, only process that one service
-    5. Parse the PROVIDER argument (default: azure if not specified)
+    5. Parse the PROVIDER argument (default: core,core-plus,azure if not specified)
     6. For each service, execute Maven build phases: compile, test, and coverage
 
 PROVIDER_MAPPING:
-    - azure → -Pazure (default when not specified)
+    - core,core-plus,azure → -Pcore,core-plus,azure (default when not specified)
+    - azure → -Pazure
     - aws → -Paws
     - gc → -Pgc
     - ibm → -Pibm
@@ -25,7 +26,8 @@ PROVIDER_MAPPING:
     - all → -Pazure,aws,gc,ibm
     - Multiple (e.g., "azure,aws") → -Pazure,aws
 
-    Note: The 'core' profile is activeByDefault=true in most services, so it's always included.
+    Note: The default 'core,core-plus,azure' provides comprehensive coverage: core for base functionality,
+    core-plus for enhanced features, and azure for provider-specific implementation.
 
 SERVICE_LIST:
 
@@ -157,10 +159,51 @@ TEST_PHASE:
         - Test results: "Tests run: X, Failures: Y, Errors: Z"
         - Test summary: "Results:"
         - Build success/failure
-    - Parse test results:
-        - Extract total tests run
-        - Extract test failures count
-        - Extract test errors count
+
+    CRITICAL TEST RESULT TRACKING:
+    - For MULTI-PROFILE builds (-Pcore,core-plus,azure), you MUST:
+        1. Track which Maven module is currently building by detecting "[INFO] Building {module-name}"
+        2. Map each module to its profile (e.g., partition-core → core, partition-azure → azure)
+        3. Record test counts PER MODULE/PROFILE, not just the final total
+        4. Output structured test results (see TEST_RESULT_OUTPUT below)
+
+    - For SINGLE-PROFILE builds (-Pazure), track the aggregate test count
+
+    TEST_RESULT_OUTPUT:
+    - After Maven test execution completes, output structured test results
+    - Use EXACTLY this format for the parser to extract counts:
+
+    Single-profile format (all tests pass):
+    ```
+    [TEST_RESULTS:partition]
+    profile=azure,tests_run=61,failures=0,errors=0,skipped=0
+    [/TEST_RESULTS]
+    ```
+
+    Single-profile format (with failures):
+    ```
+    [TEST_RESULTS:partition]
+    profile=azure,tests_run=61,failures=2,errors=1,skipped=0
+    failed_tests=TestAuth.testLogin,TestAuth.testLogout,TestDB.testConnection
+    [/TEST_RESULTS]
+    ```
+
+    Multi-profile format (output one block per profile that has tests):
+    ```
+    [TEST_RESULTS:partition]
+    profile=core,tests_run=61,failures=0,errors=0,skipped=0
+    profile=azure,tests_run=61,failures=2,errors=1,skipped=0
+    failed_tests[azure]=TestAzureBlob.testUpload,TestAzureAuth.testToken,TestAzureQueue.testSend
+    [/TEST_RESULTS]
+    ```
+
+    - IMPORTANT: Output these blocks as regular text in your response
+    - Do NOT use echo or bash commands to output these blocks
+    - Place the blocks after you've analyzed the Maven output
+    - If no tests were found for a profile, use tests_run=0
+    - OPTIONAL: Include failed_tests line with comma-separated test names if available
+    - For multi-profile, use failed_tests[profile]=... format
+
     - Report test result:
         - All passed: "✓ All X tests passed"
         - Some failed: "✗ Y of X tests failed" with failure details
@@ -171,7 +214,11 @@ COVERAGE_PHASE:
     - Only execute if TEST_PHASE completed (regardless of pass/fail)
     - Check if JaCoCo is configured (look for jacoco-maven-plugin in pom.xml)
     - If JaCoCo is available:
-        - Execute: mvn jacoco:report
+        - CRITICAL: Execute coverage generation with THE SAME PROFILES used in TEST_PHASE
+        - Command: mvn jacoco:report -P{profiles}
+        - Example (single): mvn jacoco:report -Pazure
+        - Example (multi): mvn jacoco:report -Pcore,core-plus,azure
+        - This ensures per-module coverage reports are generated for each tested profile
         - Monitor output for coverage generation
         - Parse coverage report if available:
             - Look for coverage percentages in output
@@ -183,6 +230,23 @@ COVERAGE_PHASE:
     - If JaCoCo not configured:
         - Skip this phase
         - Report: "Coverage plugin not configured"
+
+    MULTI-PROFILE COVERAGE:
+    - When multiple profiles are specified (e.g., core,core-plus,azure), coverage is extracted per profile
+    - The test runner automatically:
+        1. Maps each profile to its corresponding Maven module(s) by examining directory structure
+        2. Reads per-module JaCoCo CSV reports from {module}/target/site/jacoco/jacoco.csv
+        3. Aggregates coverage data at the service level
+    - Module detection patterns (in order of priority):
+        1. {service}-{profile}/ (e.g., partition-core/, partition-azure/)
+        2. providers/{service}-{profile}/ (e.g., providers/partition-azure/)
+        3. provider/{service}-{profile}/ (singular)
+        4. Any subdirectory containing the profile name (e.g., core/, azure-provider/)
+    - Special handling:
+        - "core" profile matches "partition-core" but NOT "partition-core-plus"
+        - "core-plus" profile only matches modules with "core-plus" or "coreplus" in the name
+    - Fallback: If no module directories are found, the runner falls back to filtering aggregated CSV by package names
+    - Consistency: Coverage parsing is deterministic and returns identical results across multiple runs
 
 ERROR_HANDLING:
     - If Maven command not found:
@@ -269,34 +333,79 @@ FINAL_REPORT:
 
 <EXAMPLES>
 
-Example 1: Single service with default provider (azure)
+Example 1: Single service with single provider (azure)
     Input: SERVICES=partition, PROVIDER=azure
     Actions:
         1. Check repos/partition/ exists
         2. Execute: mvn clean compile -Pazure
         3. Execute: mvn test -Pazure -DskipITs
-        4. Execute: mvn jacoco:report
+           Monitor output and detect: "Tests run: 61, Failures: 0, Errors: 0, Skipped: 0"
+        4. Output structured test results:
+           [TEST_RESULTS:partition]
+           profile=azure,tests_run=61,failures=0,errors=0,skipped=0
+           [/TEST_RESULTS]
+        5. Execute: mvn jacoco:report -Pazure
     Output:
-        ✓ partition: Compiled successfully
-        ✓ partition: All 42 tests passed
-        📊 partition: Coverage - Line 78%, Branch 65%
+        ✓ partition: Starting compile phase
+        ✓ partition: Starting test phase
+        [TEST_RESULTS:partition]
+        profile=azure,tests_run=61,failures=0,errors=0,skipped=0
+        [/TEST_RESULTS]
+        ✓ partition: Starting coverage phase
+        ✓ partition: Compiled successfully, 61 tests passed, Coverage report generated
 
-Example 2: Multiple services with multiple providers
-    Input: SERVICES=partition,legal, PROVIDER=azure,aws
+Example 2: Single service with multiple providers (core,core-plus,azure)
+    Input: SERVICES=partition, PROVIDER=core,core-plus,azure
+    Actions:
+        1. Check repos/partition/ exists
+        2. Execute: mvn clean compile -Pcore,core-plus,azure
+        3. Execute: mvn test -Pcore,core-plus,azure -DskipITs
+           Track Maven modules during execution:
+           - Detect "[INFO] Building partition-core 0.29.0-SNAPSHOT [2/4]"
+           - Record: "Tests run: 61, Failures: 0" for partition-core
+           - Detect "[INFO] Building partition-azure 0.29.0-SNAPSHOT [4/4]"
+           - Record: "Tests run: 61, Failures: 0" for partition-azure
+        4. Output structured test results:
+           [TEST_RESULTS:partition]
+           profile=core,tests_run=61,failures=0,errors=0,skipped=0
+           profile=azure,tests_run=61,failures=0,errors=0,skipped=0
+           [/TEST_RESULTS]
+        5. Execute: mvn jacoco:report -Pcore,core-plus,azure
+    Output:
+        ✓ partition: Starting compile phase
+        ✓ partition: Starting test phase
+        [TEST_RESULTS:partition]
+        profile=core,tests_run=61,failures=0,errors=0,skipped=0
+        profile=azure,tests_run=61,failures=0,errors=0,skipped=0
+        [/TEST_RESULTS]
+        ✓ partition: Starting coverage phase
+        ✓ partition: Compiled successfully, 122 tests passed, Coverage report generated
+
+Example 3: Multiple services with multiple providers
+    Input: SERVICES=partition,entitlements,legal, PROVIDER=core,core-plus,azure
     Actions:
         1. For partition:
-            - mvn clean compile -Pazure,aws
-            - mvn test -Pazure,aws -DskipITs
-            - mvn jacoco:report
-        2. For legal:
-            - mvn clean compile -Pazure,aws
-            - mvn test -Pazure,aws -DskipITs
-            - mvn jacoco:report
-    Output:
-        ✓ partition: Compiled, 42 tests passed, Coverage 78%/65%
-        ✓ legal: Compiled, 38 tests passed, Coverage 82%/70%
+            - mvn clean compile -Pcore,core-plus,azure
+            - mvn test -Pcore,core-plus,azure -DskipITs
+            - Track modules: partition-core (61 tests), partition-azure (61 tests)
+            - Output: [TEST_RESULTS:partition] with both profiles
+        2. For entitlements:
+            - mvn clean compile -Pcore,core-plus,azure
+            - mvn test -Pcore,core-plus,azure -DskipITs
+            - Track modules: entitlements-v2-core (195 tests), entitlements-v2-azure (61 tests)
+            - Output: [TEST_RESULTS:entitlements] with both profiles
+        3. For legal:
+            - mvn clean compile -Pcore,core-plus,azure
+            - mvn test -Pcore,core-plus,azure -DskipITs
+            - Track modules: legal-core (308 tests), legal-azure (54 tests)
+            - Output: [TEST_RESULTS:legal] with both profiles
+    Final totals:
+        partition: 122 tests (61 core + 61 azure)
+        entitlements: 256 tests (195 core + 61 azure)
+        legal: 362 tests (308 core + 54 azure)
+        Total: 740 tests
 
-Example 3: Service with compilation error
+Example 4: Service with compilation error
     Input: SERVICES=partition, PROVIDER=azure
     Actions:
         1. mvn clean compile -Pazure
@@ -305,14 +414,5 @@ Example 3: Service with compilation error
     Output:
         ✗ partition: Compilation failed
         Error: [ERROR] /path/to/File.java:[10,8] cannot find symbol
-
-Example 4: Repository not found
-    Input: SERVICES=partition, PROVIDER=azure
-    Actions:
-        1. Check repos/partition/ - NOT FOUND
-        2. Skip all phases
-    Output:
-        ✗ partition: Repository not found
-        Guidance: Run /fork partition first to clone the repository
 
 </EXAMPLES>

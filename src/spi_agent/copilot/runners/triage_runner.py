@@ -227,7 +227,7 @@ Do NOT include other providers or testing modules unless specified.
             self.output_lines.append(f"   ↪ Scanning with Trivy (~30-60s)...")
 
             layout["status"].update(self.tracker.get_table())
-            layout["output"].update(self.get_output_panel())
+            layout["output"].update(self._output_panel_renderable)
             live.refresh()
 
             # Create a task for the agent call
@@ -294,7 +294,7 @@ Do NOT include other providers or testing modules unless specified.
             self.full_output.append("")
 
             # Update display with agent response
-            layout["output"].update(self.get_output_panel())
+            layout["output"].update(self._output_panel_renderable)
             layout["status"].update(self.tracker.get_table())
             live.refresh()
 
@@ -1022,7 +1022,7 @@ Do NOT include other providers or testing modules unless specified.
         # Create layout
         layout = self.create_layout()
         layout["status"].update(self.tracker.get_table())
-        layout["output"].update(self.get_output_panel())
+        layout["output"].update(self._output_panel_renderable)
 
         try:
             # Run with Live display
@@ -1039,7 +1039,7 @@ Do NOT include other providers or testing modules unless specified.
                         self.full_output.append(f"Starting triage analysis for {service}...")
 
                         # Update display
-                        layout["output"].update(self.get_output_panel())
+                        layout["output"].update(self._output_panel_renderable)
                         layout["status"].update(self.tracker.get_table())
                         live.refresh()
 
@@ -1057,13 +1057,13 @@ Do NOT include other providers or testing modules unless specified.
 
                 # Add scan completion message to output panel
                 self.output_lines.append("✓ Scans complete for all services")
-                layout["output"].update(self.get_output_panel())
+                layout["output"].update(self._output_panel_renderable)
                 layout["status"].update(self.tracker.get_table())
                 live.refresh()
 
                 # Add CVE analysis message to output panel
                 self.output_lines.append(f"   ↪ Analyzing CVE findings...")
-                layout["output"].update(self.get_output_panel())
+                layout["output"].update(self._output_panel_renderable)
                 live.refresh()
 
                 # Analyze CVEs with agent (while still in Live context so output shows progress)
@@ -1071,7 +1071,7 @@ Do NOT include other providers or testing modules unless specified.
 
                 # Add completion message to output panel
                 self.output_lines.append("✓ CVE analysis complete")
-                layout["output"].update(self.get_output_panel())
+                layout["output"].update(self._output_panel_renderable)
                 live.refresh()
 
             # Post-processing outside Live context

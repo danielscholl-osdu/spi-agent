@@ -289,14 +289,15 @@ class TestQualityGradeCalculation:
         assert test_runner.tracker.services["test-service"]["quality_label"] == "Poor"
 
     def test_grade_f_zero_coverage(self, test_runner):
-        """Test grade F with specific label is assigned for zero coverage."""
+        """Test grade None with specific label is assigned for zero coverage."""
         test_runner.tracker.services["test-service"]["coverage_line"] = 0
         test_runner.tracker.services["test-service"]["coverage_branch"] = 0
 
         test_runner._assess_coverage_quality()
 
-        assert test_runner.tracker.services["test-service"]["quality_grade"] == "F"
-        assert test_runner.tracker.services["test-service"]["quality_label"] == "No Coverage"
+        # Zero coverage returns None grade to distinguish from actual "F" grade
+        assert test_runner.tracker.services["test-service"]["quality_grade"] is None
+        assert test_runner.tracker.services["test-service"]["quality_label"] == "No Coverage Data"
         assert "JaCoCo plugin" in test_runner.tracker.services["test-service"]["quality_summary"]
 
     def test_zero_coverage_recommendations(self, test_runner):
@@ -343,6 +344,191 @@ class TestQualityGradeCalculation:
         recommendations = test_runner.tracker.services["test-service"]["recommendations"]
         # Should recommend maintaining current levels
         assert any("maintain" in rec["action"].lower() for rec in recommendations)
+
+
+class TestMultiProfileCoverageExtraction:
+    """Tests for multi-profile coverage extraction."""
+
+    @pytest.fixture
+    def multi_profile_runner(self):
+        """Create a TestRunner with multiple profiles."""
+        mock_prompt = MagicMock()
+        mock_prompt.read_text.return_value = "Test prompt"
+
+        runner = TestRunner(
+            prompt_file=mock_prompt,
+            services=["partition"],
+            provider="core,core-plus,azure"
+        )
+        runner.logger = Mock(spec=logging.Logger)
+        return runner
+
+    @pytest.fixture
+    def partition_service_dir(self, tmp_path):
+        """Create a realistic partition service directory structure."""
+        partition_dir = tmp_path / "partition"
+        partition_dir.mkdir()
+
+        # Create core module
+        core_dir = partition_dir / "partition-core"
+        core_jacoco = core_dir / "target" / "site" / "jacoco"
+        core_jacoco.mkdir(parents=True, exist_ok=True)
+
+        # Create core-plus module
+        core_plus_dir = partition_dir / "partition-core-plus"
+        core_plus_jacoco = core_plus_dir / "target" / "site" / "jacoco"
+        core_plus_jacoco.mkdir(parents=True, exist_ok=True)
+
+        # Create azure provider module
+        azure_dir = partition_dir / "providers" / "partition-azure"
+        azure_jacoco = azure_dir / "target" / "site" / "jacoco"
+        azure_jacoco.mkdir(parents=True, exist_ok=True)
+
+        return partition_dir
+
+    def test_map_profile_to_modules_core(self, multi_profile_runner, partition_service_dir):
+        """Test mapping 'core' profile to module directories."""
+        modules = multi_profile_runner._map_profile_to_modules("partition", partition_service_dir, "core")
+
+        assert len(modules) == 1
+        assert any("partition-core" in str(m) for m in modules)
+        assert not any("core-plus" in str(m) for m in modules)
+
+    def test_map_profile_to_modules_core_plus(self, multi_profile_runner, partition_service_dir):
+        """Test mapping 'core-plus' profile to module directories."""
+        modules = multi_profile_runner._map_profile_to_modules("partition", partition_service_dir, "core-plus")
+
+        assert len(modules) == 1
+        assert any("core-plus" in str(m) for m in modules)
+
+    def test_map_profile_to_modules_azure(self, multi_profile_runner, partition_service_dir):
+        """Test mapping 'azure' profile to provider module."""
+        modules = multi_profile_runner._map_profile_to_modules("partition", partition_service_dir, "azure")
+
+        assert len(modules) == 1
+        assert any("partition-azure" in str(m) for m in modules)
+
+    def test_profile_specific_csv_extraction_core(self, multi_profile_runner, partition_service_dir):
+        """Test extracting coverage for core profile only."""
+        # Create core module CSV
+        core_csv = partition_service_dir / "partition-core" / "target" / "site" / "jacoco" / "jacoco.csv"
+        core_csv.write_text("""GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+org.opengroup.osdu.partition.core,org.opengroup.osdu.partition.core.service,CoreService,20,180,10,90,10,90,5,45,2,18
+""")
+
+        line_cov, branch_cov = multi_profile_runner._extract_coverage_from_csv("partition", partition_service_dir, profile="core")
+
+        # Expected: 90% line and branch coverage
+        assert line_cov == 90.0
+        assert branch_cov == 90.0
+
+    def test_profile_specific_csv_extraction_azure(self, multi_profile_runner, partition_service_dir):
+        """Test extracting coverage for azure profile only."""
+        # Create azure module CSV
+        azure_csv = partition_service_dir / "providers" / "partition-azure" / "target" / "site" / "jacoco" / "jacoco.csv"
+        azure_csv.write_text("""GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+org.opengroup.osdu.partition.azure,org.opengroup.osdu.partition.azure.provider,AzureProvider,4,96,2,48,2,48,1,24,0,12
+""")
+
+        line_cov, branch_cov = multi_profile_runner._extract_coverage_from_csv("partition", partition_service_dir, profile="azure")
+
+        # Expected: 96% line, 96% branch coverage
+        assert line_cov == 96.0
+        assert branch_cov == 96.0
+
+    def test_profile_isolation_core_vs_core_plus(self, multi_profile_runner, partition_service_dir):
+        """Test that core and core-plus profiles are properly isolated."""
+        # Create core CSV
+        core_csv = partition_service_dir / "partition-core" / "target" / "site" / "jacoco" / "jacoco.csv"
+        core_csv.write_text("""GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+org.opengroup.osdu.partition.core,org.opengroup.osdu.partition.core.service,CoreService,10,90,5,45,5,45,2,23,1,11
+""")
+
+        # Create core-plus CSV
+        core_plus_csv = partition_service_dir / "partition-core-plus" / "target" / "site" / "jacoco" / "jacoco.csv"
+        core_plus_csv.write_text("""GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+org.opengroup.osdu.partition.coreplus,org.opengroup.osdu.partition.coreplus.service,CorePlusService,20,80,10,40,10,40,5,20,2,10
+""")
+
+        # Extract coverage for core (should not include core-plus)
+        core_line, core_branch = multi_profile_runner._extract_coverage_from_csv("partition", partition_service_dir, profile="core")
+        assert core_line == 90.0
+        assert core_branch == 90.0
+
+        # Extract coverage for core-plus (should not include core)
+        plus_line, plus_branch = multi_profile_runner._extract_coverage_from_csv("partition", partition_service_dir, profile="core-plus")
+        assert plus_line == 80.0
+        assert plus_branch == 80.0
+
+    def test_multi_profile_consistency(self, multi_profile_runner, partition_service_dir):
+        """Test that multiple runs return consistent results."""
+        # Create CSV files
+        core_csv = partition_service_dir / "partition-core" / "target" / "site" / "jacoco" / "jacoco.csv"
+        core_csv.write_text("""GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+org.opengroup.osdu.partition.core,org.opengroup.osdu.partition.core.service,CoreService,2,98,1,49,1,49,1,24,0,12
+""")
+
+        # Run extraction multiple times
+        results = []
+        for _ in range(3):
+            line_cov, branch_cov = multi_profile_runner._extract_coverage_from_csv("partition", partition_service_dir, profile="core")
+            results.append((line_cov, branch_cov))
+
+        # All results should be identical
+        assert len(set(results)) == 1
+        assert results[0][0] == 98.0
+        assert results[0][1] == 98.0
+
+    def test_module_naming_variations(self, multi_profile_runner, tmp_path):
+        """Test various module naming conventions."""
+        service_dir = tmp_path / "test-service"
+        service_dir.mkdir()
+
+        # Test different naming patterns
+        patterns = [
+            "test-service-azure",     # Pattern: {service}-{profile}
+            "azure",                  # Pattern: {profile} only
+            "provider-azure",         # Pattern: provider-{profile}
+        ]
+
+        for pattern in patterns:
+            module_dir = service_dir / pattern
+            jacoco_dir = module_dir / "target" / "site" / "jacoco"
+            jacoco_dir.mkdir(parents=True, exist_ok=True)
+
+            csv_path = jacoco_dir / "jacoco.csv"
+            csv_path.write_text("""GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+com.example,com.example.azure,AzureImpl,10,90,5,45,5,45,2,23,1,11
+""")
+
+        # Should find all azure modules
+        modules = multi_profile_runner._map_profile_to_modules("test-service", service_dir, "azure")
+        assert len(modules) >= 1
+
+    def test_fallback_to_aggregated_csv_filtering(self, multi_profile_runner, tmp_path):
+        """Test fallback to aggregated CSV when no module directories found."""
+        service_dir = tmp_path / "test-service"
+        service_dir.mkdir()
+
+        # Create aggregated CSV at root level with profile-specific packages
+        aggregated_csv = service_dir / "target" / "site" / "jacoco"
+        aggregated_csv.mkdir(parents=True, exist_ok=True)
+        csv_path = aggregated_csv / "jacoco.csv"
+
+        csv_path.write_text("""GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+org.example.core,org.example.core.service,CoreService,10,90,5,45,5,45,2,23,1,11
+org.example.azure,org.example.azure.provider,AzureProvider,20,80,10,40,10,40,5,20,2,10
+""")
+
+        # Extract for core profile - should filter rows
+        line_cov, branch_cov = multi_profile_runner._extract_coverage_from_csv("test-service", service_dir, profile="core")
+        assert line_cov == 90.0
+        assert branch_cov == 90.0
+
+        # Extract for azure profile - should filter rows
+        line_cov, branch_cov = multi_profile_runner._extract_coverage_from_csv("test-service", service_dir, profile="azure")
+        assert line_cov == 80.0
+        assert branch_cov == 80.0
 
 
 class TestEdgeCases:

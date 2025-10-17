@@ -231,6 +231,177 @@ class TestTestRunner:
         assert runner.tracker.services["partition"]["tests_run"] == 61
         assert runner.tracker.services["partition"]["tests_failed"] == 0
 
+    def test_parse_maven_test_output(self, mock_prompt_file):
+        """Test that Maven test output is parsed correctly in single-profile mode."""
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="azure")
+
+        # Simulate actual Maven Surefire output (includes service name in line)
+        maven_line = "partition: [INFO] Tests run: 61, Failures: 0, Errors: 0, Skipped: 0"
+        runner.parse_output(maven_line)
+
+        # Verify Maven output was parsed and stored
+        assert runner.tracker.services["partition"]["tests_run"] == 61
+        assert runner.tracker.services["partition"]["tests_failed"] == 0
+        assert runner.tracker.services["partition"]["status"] == "test_success"
+
+    def test_parse_maven_test_output_with_failures(self, mock_prompt_file):
+        """Test that Maven test output with failures is parsed correctly in single-profile mode."""
+        runner = TestRunner(mock_prompt_file, ["entitlements"], provider="azure")
+
+        # Simulate Maven output with failures and errors (includes service name)
+        maven_line = "entitlements: [INFO] Tests run: 256, Failures: 2, Errors: 1, Skipped: 0"
+        runner.parse_output(maven_line)
+
+        # Verify Maven output was parsed (failures + errors = 3)
+        assert runner.tracker.services["entitlements"]["tests_run"] == 256
+        assert runner.tracker.services["entitlements"]["tests_failed"] == 3
+
+    def test_parse_output_consistency(self, mock_prompt_file):
+        """Test that parsing returns consistent results across runs in single-profile mode."""
+        runner = TestRunner(mock_prompt_file, ["entitlements"], provider="azure")
+
+        # Parse same Maven output multiple times (includes service name)
+        for _ in range(10):
+            maven_line = "entitlements: [INFO] Tests run: 256, Failures: 2, Errors: 0, Skipped: 0"
+            runner.parse_output(maven_line)
+
+        # Should always be the same (last update wins, but value is consistent)
+        assert runner.tracker.services["entitlements"]["tests_run"] == 256
+        assert runner.tracker.services["entitlements"]["tests_failed"] == 2
+
+    def test_maven_output_priority_over_ai_summary(self, mock_prompt_file):
+        """Test that Maven output takes priority over AI summary in single-profile mode."""
+        runner = TestRunner(mock_prompt_file, ["entitlements"], provider="azure")
+
+        # First, parse Maven output (includes service name)
+        maven_line = "entitlements: [INFO] Tests run: 256, Failures: 0, Errors: 0, Skipped: 0"
+        runner.parse_output(maven_line)
+        assert runner.tracker.services["entitlements"]["tests_run"] == 256
+
+        # Then parse AI summary with different count (should be ignored)
+        ai_summary = "✓ entitlements: Compiled successfully, 7 tests passed, Coverage report generated"
+        runner.parse_output(ai_summary)
+
+        # Maven count should be preserved, not overwritten by AI summary
+        assert runner.tracker.services["entitlements"]["tests_run"] == 256
+
+    def test_ai_summary_fallback_when_no_maven_output(self, mock_prompt_file):
+        """Test that AI summary is used as fallback when Maven output is not available."""
+        runner = TestRunner(mock_prompt_file, ["legal"])
+
+        # Parse only AI summary (no Maven output)
+        ai_summary = "✓ legal: Compiled successfully, 27 tests passed, Coverage report generated"
+        runner.parse_output(ai_summary)
+
+        # AI summary should be used as fallback
+        assert runner.tracker.services["legal"]["tests_run"] == 27
+        assert runner.tracker.services["legal"]["tests_failed"] == 0
+
+    def test_parse_building_module_header(self, mock_prompt_file):
+        """Test that Maven 'Building' headers are parsed to track current module."""
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="core,azure")
+
+        # Simulate Building header
+        runner.parse_output("[INFO] Building partition-core 0.29.0-SNAPSHOT")
+
+        # Check that current module is tracked
+        assert runner.current_module == "partition-core"
+
+    def test_parse_per_profile_test_counts(self, mock_prompt_file):
+        """Test that per-profile test counts are extracted correctly."""
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="core,azure")
+
+        # Simulate Maven multi-profile output
+        runner.parse_output("partition: [INFO] Building partition-core 0.29.0-SNAPSHOT")
+        runner.parse_output("partition: [INFO] Tests run: 61, Failures: 0, Errors: 0, Skipped: 0")
+
+        runner.parse_output("partition: [INFO] Building partition-azure 0.29.0-SNAPSHOT")
+        runner.parse_output("partition: [INFO] Tests run: 61, Failures: 0, Errors: 0, Skipped: 0")
+
+        # Verify profile-specific counts
+        assert runner.tracker.services["partition"]["profiles"]["core"]["tests_run"] == 61
+        assert runner.tracker.services["partition"]["profiles"]["azure"]["tests_run"] == 61
+
+    def test_parse_structured_format_single_profile(self, mock_prompt_file):
+        """Test parsing structured test results format for single profile."""
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="azure")
+        runner.tracker = TestTracker(["partition"], "azure", profiles=["azure"])
+
+        # Parse structured test results block
+        runner.parse_output("[TEST_RESULTS:partition]")
+        assert runner.current_test_service == "partition"
+
+        runner.parse_output("profile=azure,tests_run=61,failures=0,errors=0,skipped=0")
+        assert runner.tracker.services["partition"]["tests_run"] == 61
+        assert runner.tracker.services["partition"]["tests_failed"] == 0
+
+        runner.parse_output("[/TEST_RESULTS]")
+        assert runner.current_test_service is None
+
+    def test_parse_structured_format_multi_profile(self, mock_prompt_file):
+        """Test parsing structured test results format for multiple profiles."""
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="core,core-plus,azure")
+        runner.tracker = TestTracker(["partition"], "core,core-plus,azure", profiles=["core", "core-plus", "azure"])
+
+        # Parse structured test results block
+        runner.parse_output("[TEST_RESULTS:partition]")
+        assert runner.current_test_service == "partition"
+
+        # Parse core profile results
+        runner.parse_output("profile=core,tests_run=61,failures=0,errors=0,skipped=0")
+        assert runner.tracker.services["partition"]["profiles"]["core"]["tests_run"] == 61
+
+        # Parse azure profile results
+        runner.parse_output("profile=azure,tests_run=61,failures=2,errors=1,skipped=0")
+        assert runner.tracker.services["partition"]["profiles"]["azure"]["tests_run"] == 61
+        assert runner.tracker.services["partition"]["profiles"]["azure"]["tests_failed"] == 3  # failures + errors
+
+        runner.parse_output("[/TEST_RESULTS]")
+        assert runner.current_test_service is None
+
+        # Check aggregation happened
+        assert runner.tracker.services["partition"]["tests_run"] == 122  # 61 + 61
+
+    def test_parse_structured_format_with_failures(self, mock_prompt_file):
+        """Test parsing structured test results with failures."""
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="core,azure")
+        runner.tracker = TestTracker(["partition"], "core,azure", profiles=["core", "azure"])
+
+        # Parse structured test results block with failures
+        runner.parse_output("[TEST_RESULTS:partition]")
+        assert runner.current_test_service == "partition"
+
+        # Parse core profile - all pass
+        runner.parse_output("profile=core,tests_run=61,failures=0,errors=0,skipped=0")
+        assert runner.tracker.services["partition"]["profiles"]["core"]["tests_run"] == 61
+        assert runner.tracker.services["partition"]["profiles"]["core"]["tests_failed"] == 0
+
+        # Parse azure profile - with failures
+        runner.parse_output("profile=azure,tests_run=61,failures=3,errors=2,skipped=1")
+        assert runner.tracker.services["partition"]["profiles"]["azure"]["tests_run"] == 61
+        assert runner.tracker.services["partition"]["profiles"]["azure"]["tests_failed"] == 5  # 3 failures + 2 errors
+
+        # Parse optional failed test names
+        runner.parse_output("failed_tests[azure]=TestAzureBlob.testUpload,TestAzureAuth.testToken,TestAzureQueue.testSend")
+
+        runner.parse_output("[/TEST_RESULTS]")
+        assert runner.current_test_service is None
+
+        # Check aggregation - should have failures at service level
+        assert runner.tracker.services["partition"]["tests_run"] == 122  # 61 + 61
+        assert runner.tracker.services["partition"]["tests_failed"] == 5  # 0 + 5
+        assert runner.tracker.services["partition"]["status"] == "test_failed"  # Should be marked as failed
+
+    def test_extract_profile_from_module_name(self, mock_prompt_file):
+        """Test profile extraction from various module name formats."""
+        runner = TestRunner(mock_prompt_file, ["test"])
+
+        assert runner._extract_profile_from_module("partition-core") == "core"
+        assert runner._extract_profile_from_module("partition-core-plus") == "core-plus"
+        assert runner._extract_profile_from_module("entitlements-v2-azure") == "azure"
+        assert runner._extract_profile_from_module("legal-azure") == "azure"
+        assert runner._extract_profile_from_module("schema-aws") == "aws"
+
     def test_parse_maven_output_coverage(self, mock_prompt_file):
         """Test parsing coverage output."""
         runner = TestRunner(mock_prompt_file, ["partition"])
@@ -399,7 +570,7 @@ class TestTestRunner:
 
     def test_extract_coverage_from_html_report(self, mock_prompt_file, tmp_path):
         """Test extracting coverage from JaCoCo HTML report."""
-        runner = TestRunner(mock_prompt_file, ["partition"])
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="azure")
 
         # Create a mock JaCoCo HTML report
         jacoco_dir = tmp_path / "repos" / "partition" / "target" / "site" / "jacoco"
@@ -515,7 +686,7 @@ class TestTestRunner:
 
     def test_assess_coverage_quality(self, mock_prompt_file):
         """Test the coverage quality assessment method."""
-        runner = TestRunner(mock_prompt_file, ["partition"])
+        runner = TestRunner(mock_prompt_file, ["partition"], provider="azure")
 
         # Set up coverage data for Grade B (85% line, 72% branch)
         runner.tracker.services["partition"]["coverage_line"] = 85

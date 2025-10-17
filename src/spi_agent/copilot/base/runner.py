@@ -1,5 +1,6 @@
 """Abstract base class for all copilot runners."""
 
+import os
 import subprocess
 from abc import ABC, abstractmethod
 from collections import deque
@@ -15,7 +16,21 @@ from rich.text import Text
 
 from spi_agent.copilot.config import log_dir
 
+
+class _OutputPanelRenderable:
+    """Rich renderable that rebuilds the output panel on each render."""
+
+    def __init__(self, runner: "BaseRunner"):
+        self.runner = runner
+
+    def __rich__(self):
+        return self.runner.get_output_panel()
+
 console = Console()
+MIN_VISIBLE_OUTPUT_LINES = 12
+MAX_VISIBLE_OUTPUT_LINES = 80
+TERMINAL_PADDING_LINES = 2
+DEFAULT_VISIBLE_OUTPUT_LINES = 40
 
 
 class BaseRunner(ABC):
@@ -37,6 +52,7 @@ class BaseRunner(ABC):
         self.output_lines = deque(maxlen=200)  # Keep last 200 lines (supports multi-service output)
         self.full_output = []  # Keep all output for logging
         self.tracker = None  # Must be set by subclass
+        self._output_panel_renderable = _OutputPanelRenderable(self)
 
         # Generate log file path - subclasses should override log_prefix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -92,7 +108,31 @@ class BaseRunner(ABC):
             Layout(name="status", ratio=1),
             Layout(name="output", ratio=2)
         )
+        layout["output"].update(self._output_panel_renderable)
         return layout
+
+    def _determine_visible_output_lines(self) -> int:
+        """Calculate how many lines of agent output to render in the live panel."""
+        env_value = os.getenv("SPI_AGENT_VISIBLE_OUTPUT_LINES")
+
+        if env_value:
+            try:
+                parsed = int(env_value)
+                return max(MIN_VISIBLE_OUTPUT_LINES, min(parsed, MAX_VISIBLE_OUTPUT_LINES))
+            except ValueError:
+                # Fall back to console-based sizing
+                pass
+
+        try:
+            terminal_height = console.size.height
+        except Exception:  # pragma: no cover - terminal size lookup may fail
+            terminal_height = 0
+
+        if terminal_height and terminal_height > TERMINAL_PADDING_LINES + MIN_VISIBLE_OUTPUT_LINES:
+            recommended = terminal_height - TERMINAL_PADDING_LINES
+            return max(MIN_VISIBLE_OUTPUT_LINES, min(recommended, MAX_VISIBLE_OUTPUT_LINES))
+
+        return DEFAULT_VISIBLE_OUTPUT_LINES
 
     def get_output_panel(self) -> Panel:
         """Create panel with scrolling output.
@@ -100,12 +140,36 @@ class BaseRunner(ABC):
         Returns:
             Rich Panel with formatted output
         """
+        visible_lines = self._determine_visible_output_lines()
+        target_lines = min(
+            max(visible_lines or DEFAULT_VISIBLE_OUTPUT_LINES, MIN_VISIBLE_OUTPUT_LINES),
+            MAX_VISIBLE_OUTPUT_LINES,
+        )
+        panel_height = target_lines + 2  # account for panel border
+
+        display_line_count = 1  # default when waiting for output
+        total_lines = 0
+
         if not self.output_lines:
             output_text = Text("Waiting for output...", style="dim")
         else:
             # Join lines and create text
             output_text = Text()
-            for line in self.output_lines:
+            lines = list(self.output_lines)
+            total_lines = len(lines)
+
+            if total_lines > target_lines:
+                truncated = total_lines - target_lines
+                plural = "s" if truncated != 1 else ""
+                output_text.append(
+                    f"... ({truncated} earlier line{plural} hidden; full log saved to {self.log_file.name})\n",
+                    style="dim",
+                )
+                lines = lines[-target_lines:]
+
+            display_line_count = len(lines) if lines else 1
+
+            for line in lines:
                 line_lower = line.lower()
 
                 # Add color coding for common patterns
@@ -129,7 +193,7 @@ class BaseRunner(ABC):
                 else:
                     output_text.append(line + "\n", style="white")
 
-        return Panel(output_text, title="📋 Agent Output", border_style="blue")
+        return Panel(output_text, title="📋 Agent Output", border_style="blue", height=panel_height)
 
     @abstractmethod
     def show_config(self) -> None:
@@ -170,7 +234,6 @@ class BaseRunner(ABC):
             # Initialize panels with content before entering Live context
             if self.tracker:
                 layout["status"].update(self.tracker.get_table())
-            layout["output"].update(self.get_output_panel())
 
             # Live display with split view
             from rich.live import Live
@@ -190,7 +253,7 @@ class BaseRunner(ABC):
                             # Update both panels
                             if self.tracker:
                                 layout["status"].update(self.tracker.get_table())
-                            layout["output"].update(self.get_output_panel())
+                            layout["output"].update(self._output_panel_renderable)
 
                 # Wait for process to complete
                 process.wait()

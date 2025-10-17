@@ -104,9 +104,10 @@ class TestTracker(BaseTracker):
             # Handle optional test-specific fields
             if "phase" in kwargs and kwargs["phase"]:
                 self.services[service]["phase"] = kwargs["phase"]
-            if "tests_run" in kwargs and kwargs["tests_run"] > 0:
+            # Store test counts including 0 (previously prevented by > 0 check)
+            if "tests_run" in kwargs:
                 self.services[service]["tests_run"] = kwargs["tests_run"]
-            if "tests_failed" in kwargs and kwargs["tests_failed"] > 0:
+            if "tests_failed" in kwargs:
                 self.services[service]["tests_failed"] = kwargs["tests_failed"]
             if "coverage_line" in kwargs and kwargs["coverage_line"] > 0:
                 self.services[service]["coverage_line"] = kwargs["coverage_line"]
@@ -153,6 +154,10 @@ class TestTracker(BaseTracker):
         self.services[service]["coverage_line"] = avg_line_cov
         self.services[service]["coverage_branch"] = avg_branch_cov
 
+        # Update service status if there are failures
+        if total_tests_failed > 0:
+            self.services[service]["status"] = "test_failed"
+
         # Service-level grade is worst grade among profiles
         grades_order = {"A": 5, "B": 4, "C": 3, "D": 2, "F": 1, None: 0}
         worst_grade = None
@@ -171,9 +176,9 @@ class TestTracker(BaseTracker):
         """Generate Rich table of test status"""
         table = Table(title="Service Status", expand=True)
         table.add_column("Service", style="cyan", no_wrap=True)
-        table.add_column("Provider", style="blue", no_wrap=True)
         table.add_column("Status", style="yellow")
-        table.add_column("Details", style="white", max_width=20, overflow="ellipsis")
+        table.add_column("P", style="green", justify="right", no_wrap=True)
+        table.add_column("F", style="red", justify="right", no_wrap=True)
 
         for service, data in self.services.items():
             status_style = {
@@ -204,26 +209,26 @@ class TestTracker(BaseTracker):
             }
             status_display = status_map.get(data["status"], data["status"].title())
 
-            # Include test/coverage info in details for completed services
-            details = data.get("details", "")
-            if data["status"] == "test_success" and (data["tests_run"] > 0 or data["coverage_line"] > 0):
-                test_info = f"{data['tests_run']} tests" if data["tests_run"] > 0 else ""
-                cov_info = f"{data['coverage_line']}%/{data['coverage_branch']}%" if data["coverage_line"] > 0 else ""
-                if data.get("quality_grade"):
-                    cov_info += f" (Grade {data['quality_grade']})"
+            # Format pass/fail counts similar to triage vulnerability columns
+            tests_passed = data["tests_run"] - data["tests_failed"]
 
-                if test_info and cov_info:
-                    details = f"{test_info}, {cov_info}"
-                elif test_info:
-                    details = test_info
-                elif cov_info:
-                    details = f"Coverage: {cov_info}"
+            # Pass column: show count or "-" if no tests
+            if data["tests_run"] > 0:
+                pass_str = f"[green]{tests_passed}[/green]"
+            else:
+                pass_str = "-"
+
+            # Fail column: show bold red count if failures, otherwise "-"
+            if data["tests_failed"] > 0:
+                fail_str = f"[bold red]{data['tests_failed']}[/bold red]"
+            else:
+                fail_str = "-"
 
             table.add_row(
                 f"{data['icon']} {service}",
-                self.provider.capitalize(),
                 f"[{status_style}]{status_display}[/{status_style}]",
-                details,
+                pass_str,
+                fail_str,
             )
 
         return table
