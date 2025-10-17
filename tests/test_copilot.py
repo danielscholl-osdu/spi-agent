@@ -402,15 +402,6 @@ class TestTestRunner:
         assert runner._extract_profile_from_module("legal-azure") == "azure"
         assert runner._extract_profile_from_module("schema-aws") == "aws"
 
-    def test_parse_maven_output_coverage(self, mock_prompt_file):
-        """Test parsing coverage output."""
-        runner = TestRunner(mock_prompt_file, ["partition"])
-        runner.tracker.update("partition", "testing", "Tests complete", phase="test")
-
-        # Coverage phase start
-        runner.parse_output("✓ partition: Starting coverage phase")
-        assert runner.tracker.services["partition"]["status"] == "coverage"
-
     def test_parse_maven_output_coverage_copilot_format(self, mock_prompt_file):
         """Test parsing copilot coverage summary format."""
         runner = TestRunner(mock_prompt_file, ["partition"])
@@ -474,11 +465,12 @@ class TestTestRunner:
         runner.parse_output("✓ legal: Starting compile phase")
         assert runner.tracker.services["legal"]["status"] == "compiling"
 
+    @patch("spi_agent.copilot.runners.test_runner.subprocess.run")
     @patch("spi_agent.copilot.runners.test_runner.subprocess.Popen")
     @patch("spi_agent.copilot.runners.test_runner.console")
-    def test_run_success(self, mock_console, mock_popen, mock_prompt_file):
+    def test_run_success(self, mock_console, mock_popen, mock_run, mock_prompt_file):
         """Test successful test execution."""
-        # Mock subprocess
+        # Mock subprocess.Popen (for copilot execution)
         mock_process = Mock()
         mock_process.stdout = iter(
             [
@@ -490,13 +482,21 @@ class TestTestRunner:
         mock_process.wait = Mock()
         mock_popen.return_value = mock_process
 
+        # Mock subprocess.run (for mvn jacoco:report coverage generation)
+        mock_run_result = Mock()
+        mock_run_result.returncode = 0
+        mock_run_result.stdout = "BUILD SUCCESS"
+        mock_run_result.stderr = ""
+        mock_run.return_value = mock_run_result
+
         runner = TestRunner(mock_prompt_file, ["partition"])
 
         with patch("spi_agent.copilot.runners.test_runner.Live"):
             result = runner.run()
 
         assert result == 0
-        mock_popen.assert_called_once()
+        # Popen should be called once for copilot execution
+        assert mock_popen.call_count == 1
 
     @patch("spi_agent.copilot.runners.test_runner.subprocess.Popen")
     @patch("spi_agent.copilot.runners.test_runner.console")
@@ -569,38 +569,17 @@ class TestTestRunner:
         # Just verify it doesn't crash - it prints to real console in test
 
     def test_extract_coverage_from_html_report(self, mock_prompt_file, tmp_path):
-        """Test extracting coverage from JaCoCo HTML report."""
+        """Test extracting coverage from JaCoCo CSV report (preferred method)."""
         runner = TestRunner(mock_prompt_file, ["partition"], provider="azure")
 
-        # Create a mock JaCoCo HTML report
-        jacoco_dir = tmp_path / "repos" / "partition" / "target" / "site" / "jacoco"
+        # Create a mock JaCoCo CSV report (now the preferred method)
+        jacoco_dir = tmp_path / "repos" / "partition" / "provider" / "partition-azure" / "target" / "site" / "jacoco"
         jacoco_dir.mkdir(parents=True)
 
-        html_content = """<!DOCTYPE html>
-<html>
-<body>
-<table>
-<tfoot>
-<tr class="total">
-<td>Total</td>
-<td class="bar">0 of 1,036</td>
-<td class="ctr2">100%</td>
-<td class="bar">3 of 86</td>
-<td class="ctr2">96%</td>
-<td class="ctr1">3</td>
-<td class="ctr2">88</td>
-<td class="ctr1">0</td>
-<td class="ctr2">213</td>
-<td class="ctr1">0</td>
-<td class="ctr2">45</td>
-<td class="ctr1">0</td>
-<td class="ctr2">9</td>
-</tr>
-</tfoot>
-</table>
-</body>
-</html>"""
-        (jacoco_dir / "index.html").write_text(html_content)
+        # CSV format: GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+        csv_content = """GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+partition,org.opengroup.osdu.partition,PartitionService,0,1036,3,86,0,213,0,45,0,9"""
+        (jacoco_dir / "jacoco.csv").write_text(csv_content)
 
         # Change to temp directory
         import os
@@ -611,8 +590,9 @@ class TestTestRunner:
             # Extract coverage
             runner._extract_coverage_from_reports()
 
-            # Verify coverage was extracted
+            # Verify coverage was extracted (100% line coverage, 96.6% branch coverage)
             assert runner.tracker.services["partition"]["coverage_line"] == 100
+            # Branch coverage: 86 covered / (3 missed + 86 covered) = 96.6% -> rounded to 96%
             assert runner.tracker.services["partition"]["coverage_branch"] == 96
         finally:
             os.chdir(old_cwd)

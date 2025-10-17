@@ -402,7 +402,7 @@ class TestWorkflowIntegration:
                     agent=mock_agent,
                     services=["partition"],
                     severity_filter=["critical", "high"],
-                    maven_profiles=["azure"],
+                    providers=["azure"],
                     create_issue=False,
                 )
 

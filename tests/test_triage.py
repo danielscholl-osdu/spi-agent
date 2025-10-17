@@ -103,7 +103,7 @@ class TestTriageTracker:
         table = tracker.get_table()
 
         assert table.title == "🔍 Triage Status"
-        assert len(table.columns) == 6  # Service, Status, Critical, High, Medium, Details
+        assert len(table.columns) == 5  # Service, Status, Critical, High, Medium
 
     def test_status_icons(self):
         """Test that different statuses have correct icons."""
@@ -174,8 +174,8 @@ class TestTriageRunner:
         )
 
         assert runner.create_issue is False
-        assert runner.severity_filter == ["critical", "high", "medium"]
-        assert runner.maven_profiles == ["azure"]
+        assert runner.severity_filter is None  # None = all severities
+        assert runner.providers == ["azure"]  # Default provider
 
     def test_load_prompt(self, mock_prompt_file, mock_agent):
         """Test prompt loading and augmentation."""
@@ -200,7 +200,8 @@ class TestTriageRunner:
         """Test parsing agent response with vulnerability counts."""
         runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
 
-        response = "partition: Analysis complete - 3 critical, 5 high, 12 medium vulnerabilities"
+        # Use the expected format: Critical: X, High: Y, Medium: Z
+        response = "partition: Analysis complete - Critical: 3, High: 5, Medium: 12 vulnerabilities"
         runner.parse_agent_response("partition", response)
 
         assert runner.tracker.services["partition"]["critical"] == 3
@@ -250,8 +251,8 @@ class TestTriageRunner:
 
         # Panel should be security assessment panel
         assert panel.title == "🛡️ Security Assessment"
-        # With 3 critical and 7 high total, grade should be B (blue border)
-        assert panel.border_style == "blue"
+        # With 3 critical total, border should be red
+        assert panel.border_style == "red"
 
     def test_get_results_panel_high_only(self, mock_prompt_file, mock_agent):
         """Test results panel with only high severity vulns."""
@@ -263,8 +264,8 @@ class TestTriageRunner:
 
         # Panel should be security assessment panel
         assert panel.title == "🛡️ Security Assessment"
-        # With no critical but some high, grade should be A (0C, <=10H), green border
-        assert panel.border_style == "green"
+        # With no critical but 5 high (< 20), border should be blue
+        assert panel.border_style == "blue"
 
     def test_get_results_panel_clean(self, mock_prompt_file, mock_agent):
         """Test results panel with no vulnerabilities."""
@@ -318,9 +319,9 @@ class TestTriageRunner:
         """Test running triage for a single service."""
         runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
 
-        # Mock agent response
+        # Mock agent response using the expected format (Critical: X, High: Y, Medium: Z)
         mock_agent.agent.run.return_value = (
-            "partition: Analysis complete - 3 critical, 5 high, 12 medium vulnerabilities"
+            "partition: Analysis complete - Critical: 3, High: 5, Medium: 12 vulnerabilities found"
         )
 
         # Mock layout and live objects
@@ -330,8 +331,12 @@ class TestTriageRunner:
 
         response = await runner.run_triage_for_service("partition", mock_layout, mock_live)
 
-        assert "3 critical" in response
+        assert "Critical: 3" in response
+        # The parse_agent_response method is called inside run_triage_for_service
+        # and should have extracted the vulnerability counts
         assert runner.tracker.services["partition"]["critical"] == 3
+        assert runner.tracker.services["partition"]["high"] == 5
+        assert runner.tracker.services["partition"]["medium"] == 12
         mock_agent.agent.run.assert_called_once()
 
     @pytest.mark.asyncio

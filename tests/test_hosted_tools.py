@@ -34,17 +34,16 @@ class TestCompatibilityDetection:
         expected_tools = {"file_search", "code_interpreter", "web_search"}
         assert expected_tools.issubset(set(tools))
 
-    @patch("spi_agent.hosted_tools.compatibility.agent_framework")
-    def test_detect_hosted_tools_support_unavailable(self, mock_framework):
+    @patch("spi_agent.hosted_tools.compatibility.hasattr")
+    def test_detect_hosted_tools_support_unavailable(self, mock_hasattr):
         """Test detection when hosted tools are not available."""
-        # Mock missing hosted tools
-        mock_framework.HostedFileSearchTool = None
-        delattr(mock_framework, "HostedFileSearchTool")
+        # Mock hasattr to return False for all hosted tools
+        mock_hasattr.return_value = False
 
-        # Note: This test may not work as expected due to module caching
-        # but demonstrates the intent
         result = detect_hosted_tools_support()
         assert isinstance(result, bool)
+        # Should return False when hosted tools are not available
+        assert result is False
 
     def test_is_client_compatible_with_openai_client(self):
         """Test client compatibility check with AzureOpenAIResponsesClient."""
@@ -100,8 +99,9 @@ class TestHostedToolsManager:
         # Should have tools initialized
         tools = manager.tools
         assert isinstance(tools, list)
-        # Should have at least file_search, code_interpreter, web_search
-        assert len(tools) >= 3
+        # With a Mock client (not AzureAIAgentClient), only code_interpreter is available
+        # Other tools require specific client types
+        assert len(tools) >= 1
 
     def test_manager_get_status_summary(self):
         """Test status summary generation."""
@@ -198,8 +198,9 @@ class TestHybridToolRegistration:
 
         if manager.is_available:
             # Should have hosted tools + all custom tools
-            # At least 3 hosted + 5 custom = 8 tools
-            assert len(tools) >= 8
+            # With default client (no AI Agent client), only code_interpreter is available
+            # So: 1 hosted + 5 custom = 6 tools
+            assert len(tools) >= 6
         else:
             # Fallback to custom tools only
             assert len(tools) == 5
@@ -218,8 +219,8 @@ class TestHybridToolRegistration:
 
         if manager.is_available:
             # Should have hosted tools + specialized custom tools
-            # At least 3 hosted + 2 specialized = 5 tools
-            assert len(tools) >= 5
+            # With default client: 1 hosted + 2 specialized = 3 tools
+            assert len(tools) >= 3
         else:
             # Fallback to all custom tools
             assert len(tools) == 5
@@ -238,8 +239,8 @@ class TestHybridToolRegistration:
 
         if manager.is_available:
             # Should have all custom tools + hosted tools
-            # At least 5 custom + 3 hosted = 8 tools
-            assert len(tools) >= 8
+            # With default client: 5 custom + 1 hosted = 6 tools
+            assert len(tools) >= 6
         else:
             # Fallback to custom tools only
             assert len(tools) == 5
