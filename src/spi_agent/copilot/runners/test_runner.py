@@ -16,6 +16,10 @@ from spi_agent.copilot.base.runner import console
 from spi_agent.copilot.config import config
 from spi_agent.copilot.trackers import TestTracker
 
+# Maximum depth for recursive JaCoCo CSV discovery (prevents runaway searches)
+# Depth of 8 accommodates nested structures like providers/azure/service-azure/target/site/jacoco/jacoco.csv (7 parts)
+JACOCO_CSV_MAX_SEARCH_DEPTH = 8
+
 
 class TestRunner(BaseRunner):
     """Runs Copilot CLI to execute Maven tests with live output and coverage analysis"""
@@ -510,6 +514,89 @@ class TestRunner(BaseRunner):
 
         return module_paths
 
+    def _find_all_jacoco_csvs(
+        self,
+        service: str,
+        base_path: Path,
+    ) -> List[tuple[Path, str]]:
+        """Recursively find jacoco.csv files under base_path while guarding depth.
+
+        This method discovers JaCoCo coverage reports regardless of directory structure,
+        making it resilient to inconsistent Maven module layouts.
+
+        Args:
+            service: Service name for logging
+            base_path: Base directory to search
+
+        Returns:
+            List of (csv_path, source_description) tuples
+        """
+        csv_files: list[tuple[Path, str]] = []
+        seen: set[Path] = set()
+
+        for csv_path in base_path.rglob("jacoco.csv"):
+            # Deduplication guard
+            if csv_path in seen:
+                continue
+            seen.add(csv_path)
+
+            # Calculate relative path for depth checking
+            relative = csv_path.relative_to(base_path)
+
+            # Depth guard: Prevent searching too deep (e.g., node_modules, .m2 cache)
+            if len(relative.parts) > JACOCO_CSV_MAX_SEARCH_DEPTH:
+                self.logger.debug(f"[{service}] Skipping {csv_path} (exceeds depth limit {JACOCO_CSV_MAX_SEARCH_DEPTH})")
+                continue
+
+            # Filter out test-scoped JaCoCo reports
+            if "test-classes" in relative.parts:
+                self.logger.debug(f"[{service}] Skipping {csv_path} (test-classes artifact)")
+                continue
+
+            # Extract module hint from path (for source attribution in logs)
+            # Walk backwards through directory parts (excluding filename), skip standard Maven directories
+            module_hint = next(
+                (part for part in reversed(relative.parent.parts) if part not in {"target", "site", "jacoco"}),
+                relative.parent.name,
+            )
+            csv_files.append((csv_path, f"discovered:{module_hint}"))
+
+        self.logger.info(
+            f"[{service}] Recursive search found {len(csv_files)} jacoco.csv file(s) (depth ≤ {JACOCO_CSV_MAX_SEARCH_DEPTH})"
+        )
+        return csv_files
+
+    def _verify_coverage_generated(self, service: str, base_path: Path) -> bool:
+        """Check if Maven actually generated coverage reports.
+
+        This pre-flight validation prevents the parser from attempting extraction
+        when JaCoCo reports don't exist, providing clear diagnostic messages.
+
+        Args:
+            service: Service name
+            base_path: Base path to check for reports
+
+        Returns:
+            True if at least one jacoco.csv exists anywhere under base_path
+        """
+        jacoco_files = [
+            csv_path
+            for csv_path, _ in self._find_all_jacoco_csvs(service, base_path)
+        ]
+
+        if not jacoco_files:
+            self.logger.error(
+                f"[{service}] No jacoco.csv files found anywhere in {base_path}. "
+                f"Possible causes:\n"
+                f"  1. jacoco-maven-plugin not configured in pom.xml\n"
+                f"  2. Maven 'jacoco:report' goal did not run\n"
+                f"  3. Coverage reports were deleted by 'mvn clean'"
+            )
+            return False
+
+        self.logger.info(f"[{service}] Verified coverage generation: {len(jacoco_files)} report(s) exist")
+        return True
+
     def _count_tests_from_surefire(self, service: str, base_path: Path, profile: str = None) -> tuple[int, int]:
         """
         Count tests by parsing surefire-reports/*.xml files directly.
@@ -699,6 +786,44 @@ class TestRunner(BaseRunner):
                 if aggregated_csv.exists():
                     csv_paths.append((aggregated_csv, "aggregated:filtered"))
                     self.logger.debug(f"{profile_prefix}Using aggregated CSV with row filtering: {aggregated_csv}")
+
+            # FINAL FALLBACK: Recursive discovery when all heuristics fail
+            if not csv_paths:
+                self.logger.warning(
+                    f"{profile_prefix}Module and aggregated CSVs not found at expected paths, "
+                    f"trying recursive search (depth ≤ {JACOCO_CSV_MAX_SEARCH_DEPTH})"
+                )
+                all_discovered = self._find_all_jacoco_csvs(service, base_path)
+
+                # Filter discovered CSVs to only include those matching the requested profile
+                # This prevents cross-profile contamination (e.g., azure profile parsing aws coverage)
+                profile_normalized = profile.lower().replace("-", "")
+                for csv_path, source_hint in all_discovered:
+                    path_str = str(csv_path).lower()
+
+                    # Check if profile name appears in the path
+                    matched = False
+                    if profile == "core-plus":
+                        if "core-plus" in path_str or "coreplus" in path_str:
+                            matched = True
+                    elif profile == "core":
+                        # Core must not match core-plus
+                        if "core" in path_str and "coreplus" not in path_str and "core-plus" not in path_str:
+                            matched = True
+                    else:
+                        # Regular profile matching
+                        if profile_normalized in path_str.replace("-", ""):
+                            matched = True
+
+                    if matched:
+                        # Tag as filtered so CSV parser knows to apply package filtering
+                        csv_paths.append((csv_path, f"discovered:filtered:{source_hint.split(':')[1]}"))
+                        self.logger.info(f"{profile_prefix}Matched discovered CSV: {csv_path}")
+                    else:
+                        self.logger.debug(f"{profile_prefix}Skipped discovered CSV (profile mismatch): {csv_path}")
+
+                if not csv_paths:
+                    self.logger.warning(f"{profile_prefix}Recursive search found {len(all_discovered)} CSV(s) but none matched profile '{profile}'")
         else:
             # Service-level mode: Collect all CSV files
             self.logger.info(f"{profile_prefix}Starting service-level coverage extraction")
@@ -758,8 +883,8 @@ class TestRunner(BaseRunner):
                         csv_rows_skipped += 1
                         continue
 
-                    # Profile filtering: only apply for aggregated CSV sources
-                    if profile and "aggregated:filtered" in csv_source:
+                    # Profile filtering: apply for aggregated and discovered (filtered) CSV sources
+                    if profile and ("aggregated:filtered" in csv_source or "discovered:filtered:" in csv_source):
                         # CSV columns: GROUP,PACKAGE,CLASS,...
                         group = parts[0].lower()
                         package = parts[1].lower()
@@ -937,6 +1062,25 @@ class TestRunner(BaseRunner):
                 continue
 
             self.logger.debug(f"[{service}] Searching for coverage reports in: {base_path}")
+
+            # Pre-flight validation: Check if coverage reports exist
+            if not self._verify_coverage_generated(service, base_path):
+                # Mark all profiles as having no coverage data
+                if len(self.profiles) > 1:
+                    for profile in self.profiles:
+                        self.tracker.update(
+                            service, "test_success", "No coverage plugin",
+                            profile=profile, coverage_line=0, coverage_branch=0
+                        )
+                    self.tracker._aggregate_profile_data(service)
+                else:
+                    # Preserve existing status (don't overwrite test_failed with test_success)
+                    current_status = self.tracker.services[service]["status"]
+                    self.tracker.update(
+                        service, current_status, "No coverage plugin",
+                        phase="coverage", coverage_line=0, coverage_branch=0
+                    )
+                continue
 
             if len(self.profiles) > 1:
                 # Multi-profile mode: extract coverage for each profile
