@@ -10,6 +10,7 @@ from azure.identity import AzureCliCredential, DefaultAzureCredential
 
 from spi_agent.config import AgentConfig
 from spi_agent.filesystem import create_hybrid_filesystem_tools
+from spi_agent.git import create_git_tools
 from spi_agent.github import create_github_tools
 from spi_agent.hosted_tools import HostedToolsManager
 from spi_agent.middleware import (
@@ -114,8 +115,11 @@ class SPIAgent:
             self.config, self.hosted_tools_manager
         )
 
-        # Combine GitHub tools, file system tools, and MCP tools
-        all_tools = self.github_tools + self.filesystem_tools + self.mcp_tools
+        # Create git repository management tools
+        self.git_tools = create_git_tools(self.config)
+
+        # Combine GitHub tools, file system tools, git tools, and MCP tools
+        all_tools = self.github_tools + self.filesystem_tools + self.git_tools + self.mcp_tools
 
         # Create agent with all available tools and middleware
         # Note: Thread-based memory is built-in - agent remembers within a session
