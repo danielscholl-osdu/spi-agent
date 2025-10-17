@@ -204,6 +204,24 @@ TEST_PHASE:
     - OPTIONAL: Include failed_tests line with comma-separated test names if available
     - For multi-profile, use failed_tests[profile]=... format
 
+    TEST_COUNT_EXTRACTION (CRITICAL - Must Be Deterministic):
+    - IMPORTANT: Test counts MUST be consistent and deterministic across runs
+    - After Maven test execution completes, you MUST extract test counts using surefire XML reports as the canonical source
+    - For EACH tested module, execute this command to count tests:
+        ```bash
+        cd <module-path> && grep -h 'testsuite.*tests=' target/surefire-reports/TEST-*.xml 2>/dev/null | \
+        sed -n 's/.*tests="\([0-9]*\)".*/\1/p' | awk '{sum+=$1} END {print sum}'
+        ```
+    - For multi-profile builds, map each profile to its module directory:
+        - core → {service}-core/ or {service}-v2-core/
+        - core-plus → {service}-core-plus/ or {service}-v2-core-plus/
+        - azure → provider/{service}-azure/ or provider/{service}-v2-azure/
+        - aws → provider/{service}-aws/
+    - Output structured test results in the EXACT format shown above ONLY AFTER verifying against surefire reports
+    - NEVER estimate or approximate test counts - always use surefire XML as source of truth
+    - If surefire reports don't exist, report tests_run=0 rather than guessing
+    - The test runner validates all AI-reported test counts against surefire reports post-execution
+
     - Report test result:
         - All passed: "✓ All X tests passed"
         - Some failed: "✗ Y of X tests failed" with failure details

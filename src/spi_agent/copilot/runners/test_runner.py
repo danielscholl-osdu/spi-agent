@@ -66,16 +66,16 @@ class TestRunner(BaseRunner):
             provider: Provider string (e.g., "azure", "azure,aws", "all")
 
         Returns:
-            List of profile names
+            List of profile names (normalized to lowercase)
         """
-        if provider == "all":
+        if provider.lower() == "all":
             return ["core", "core-plus", "azure", "aws", "gc", "ibm"]
         elif "," in provider:
-            # Multiple providers specified
-            return [p.strip() for p in provider.split(",")]
+            # Multiple providers specified - normalize to lowercase
+            return [p.strip().lower() for p in provider.split(",")]
         else:
-            # Single provider
-            return [provider]
+            # Single provider - normalize to lowercase
+            return [provider.strip().lower()]
 
     def _extract_profile_from_module(self, module_name: str) -> str:
         """Extract profile name from Maven module name.
@@ -144,8 +144,8 @@ class TestRunner(BaseRunner):
         #          profile=azure,tests_run=61,failures=0,errors=0,skipped=0
         #          [/TEST_RESULTS]
         if line_stripped.startswith("[TEST_RESULTS:"):
-            # Extract service name from [TEST_RESULTS:service]
-            match = re.match(r'\[TEST_RESULTS:(\w+)\]', line_stripped)
+            # Extract service name from [TEST_RESULTS:service] - allow hyphens in service names (e.g., indexer-queue)
+            match = re.match(r'\[TEST_RESULTS:([\w-]+)\]', line_stripped)
             if match:
                 self.current_test_service = match.group(1)
                 self.logger.debug(f"Detected structured test results block for: {self.current_test_service}")
@@ -372,6 +372,9 @@ class TestRunner(BaseRunner):
             # ALL post-processing happens OUTSIDE Live context to prevent panel jumping
             console.print()  # Add spacing
 
+            # Validate test counts against surefire reports (ensures deterministic, accurate counts)
+            self._validate_test_counts()
+
             # Extract coverage from JaCoCo reports (post-processing)
             self._extract_coverage_from_reports()
 
@@ -506,6 +509,153 @@ class TestRunner(BaseRunner):
             self.logger.warning(f"[{service}:{profile}] No module directories found for profile")
 
         return module_paths
+
+    def _count_tests_from_surefire(self, service: str, base_path: Path, profile: str = None) -> tuple[int, int]:
+        """
+        Count tests by parsing surefire-reports/*.xml files directly.
+
+        This provides an independent, deterministic count of tests that doesn't rely
+        on AI parsing. Surefire XML reports are always present after test execution
+        and provide accurate test counts.
+
+        Args:
+            service: Service name
+            base_path: Base path to search for surefire reports
+            profile: Optional profile name to filter by module
+
+        Returns:
+            Tuple of (tests_run, tests_failed)
+        """
+        import xml.etree.ElementTree as ET
+
+        tests_run = 0
+        tests_failed = 0
+
+        profile_prefix = f"[{service}:{profile}] " if profile else f"[{service}] "
+
+        # Map profile to module directories
+        if profile:
+            module_dirs = self._map_profile_to_modules(service, base_path, profile)
+        else:
+            # Get all modules
+            module_dirs = [base_path]
+            # Add provider subdirectories
+            for provider_dir_name in ["provider", "providers"]:
+                provider_dir = base_path / provider_dir_name
+                if provider_dir.exists():
+                    for item in provider_dir.iterdir():
+                        if item.is_dir():
+                            module_dirs.append(item)
+            # Add top-level module subdirectories
+            for item in base_path.iterdir():
+                if item.is_dir() and item.name not in ["target", "src", ".git", "provider", "providers"]:
+                    module_dirs.append(item)
+
+        # Parse surefire XML reports
+        xml_files_found = 0
+        for module_dir in module_dirs:
+            surefire_dir = module_dir / "target" / "surefire-reports"
+            if not surefire_dir.exists():
+                continue
+
+            for xml_file in surefire_dir.glob("TEST-*.xml"):
+                xml_files_found += 1
+                try:
+                    tree = ET.parse(xml_file)
+                    root = tree.getroot()
+
+                    # Parse testsuite attributes
+                    tests = int(root.get('tests', 0))
+                    failures = int(root.get('failures', 0))
+                    errors = int(root.get('errors', 0))
+
+                    tests_run += tests
+                    tests_failed += failures + errors
+
+                    self.logger.debug(f"{profile_prefix}Parsed {xml_file.name}: {tests} tests, {failures + errors} failed")
+
+                except Exception as e:
+                    self.logger.warning(f"{profile_prefix}Failed to parse {xml_file}: {e}")
+                    continue
+
+        if xml_files_found > 0:
+            self.logger.info(f"{profile_prefix}Surefire XML parsing: {tests_run} tests run, {tests_failed} failed from {xml_files_found} file(s)")
+        else:
+            self.logger.debug(f"{profile_prefix}No surefire XML reports found")
+
+        return (tests_run, tests_failed)
+
+    def _validate_test_counts(self):
+        """
+        Validate AI-reported test counts against actual surefire reports.
+        Corrects discrepancies and logs warnings when AI counts don't match reality.
+
+        This runs after the AI agent completes but before displaying final results,
+        ensuring that displayed test counts are always accurate and deterministic.
+        """
+        self.logger.info("Starting test count validation against surefire reports")
+
+        for service in self.services:
+            base_path = Path.cwd() / "repos" / service
+            if not base_path.exists():
+                base_path = Path.cwd() / service
+
+            if not base_path.exists():
+                self.logger.warning(f"[{service}] No valid path found for validation")
+                continue
+
+            if len(self.profiles) > 1:
+                # Multi-profile mode: validate each profile
+                for profile in self.profiles:
+                    ai_count = self.tracker.services[service]["profiles"][profile].get("tests_run", 0)
+                    ai_failed = self.tracker.services[service]["profiles"][profile].get("tests_failed", 0)
+
+                    actual_count, actual_failed = self._count_tests_from_surefire(service, base_path, profile)
+
+                    # Only correct if there's a mismatch AND we found actual tests
+                    if actual_count > 0 and (ai_count != actual_count or ai_failed != actual_failed):
+                        self.logger.warning(
+                            f"[{service}:{profile}] Test count mismatch - "
+                            f"AI reported {ai_count} tests ({ai_failed} failed), "
+                            f"surefire shows {actual_count} tests ({actual_failed} failed). "
+                            f"Using surefire as source of truth."
+                        )
+                        # Correct the count
+                        status = "test_failed" if actual_failed > 0 else "test_success"
+                        self.tracker.update(
+                            service, status, f"{actual_count} tests",
+                            profile=profile, tests_run=actual_count, tests_failed=actual_failed
+                        )
+                    elif actual_count > 0:
+                        self.logger.info(f"[{service}:{profile}] Test count validated: {actual_count} tests")
+
+                # Re-aggregate after corrections
+                self.tracker._aggregate_profile_data(service)
+
+            else:
+                # Single-profile mode
+                ai_count = self.tracker.services[service].get("tests_run", 0)
+                ai_failed = self.tracker.services[service].get("tests_failed", 0)
+
+                actual_count, actual_failed = self._count_tests_from_surefire(service, base_path)
+
+                # Only correct if there's a mismatch AND we found actual tests
+                if actual_count > 0 and (ai_count != actual_count or ai_failed != actual_failed):
+                    self.logger.warning(
+                        f"[{service}] Test count mismatch - "
+                        f"AI reported {ai_count} tests ({ai_failed} failed), "
+                        f"surefire shows {actual_count} tests ({actual_failed} failed). "
+                        f"Using surefire as source of truth."
+                    )
+                    status = "test_failed" if actual_failed > 0 else "test_success"
+                    self.tracker.update(
+                        service, status, f"{actual_count} tests",
+                        tests_run=actual_count, tests_failed=actual_failed
+                    )
+                elif actual_count > 0:
+                    self.logger.info(f"[{service}] Test count validated: {actual_count} tests")
+
+        self.logger.info("Test count validation complete")
 
     def _extract_coverage_from_csv(self, service: str, base_path: Path, profile: str = None) -> tuple[float, float]:
         """
@@ -804,7 +954,16 @@ class TestRunner(BaseRunner):
                             coverage_branch=int(branch_cov),
                         )
                     else:
+                        # No coverage data found - update tracker with 0% to mark coverage phase as complete
                         self.logger.warning(f"[{service}:{profile}] No coverage data found for profile")
+                        self.tracker.update(
+                            service,
+                            "test_success",
+                            "No coverage",
+                            profile=profile,
+                            coverage_line=0,
+                            coverage_branch=0,
+                        )
 
                 # Aggregate profile data to service level
                 self.tracker._aggregate_profile_data(service)
@@ -843,7 +1002,16 @@ class TestRunner(BaseRunner):
                             coverage_branch=branch_cov_html,
                         )
                     else:
+                        # No coverage data found - update tracker with 0% to mark coverage phase as complete
                         self.logger.warning(f"[{service}] Both CSV and HTML parsing failed to extract coverage")
+                        self.tracker.update(
+                            service,
+                            self.tracker.services[service]["status"],  # Keep current status
+                            "No coverage",
+                            phase="coverage",
+                            coverage_line=0,
+                            coverage_branch=0,
+                        )
 
     def _assess_profile_coverage(self, line_cov: int, branch_cov: int, profile: str = None) -> tuple:
         """Assess coverage quality for a profile or service.
@@ -1248,9 +1416,9 @@ class TestRunner(BaseRunner):
         )
 
     def _save_log(self, return_code: int):
-        """Save execution log to file"""
+        """Save execution log to file (append mode to preserve FileHandler debug logs)"""
         try:
-            with open(self.log_file, "w") as f:
+            with open(self.log_file, "a") as f:
                 f.write(f"{'='*70}\n")
                 f.write("Maven Test Execution Log\n")
                 f.write(f"{'='*70}\n")
