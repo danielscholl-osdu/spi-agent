@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import List, Union
+from typing import Dict, List, Set, Union
 
 from rich.live import Live
 from rich.panel import Panel
@@ -268,17 +268,13 @@ class TestRunner(BaseRunner):
             # Expected formats from prompt:
             # "✓ partition: Starting compile phase"
             # "✓ partition: Starting test phase"
-            # "✓ partition: Starting coverage phase"
-            # "✓ partition: Compiled successfully, 61 tests passed, Coverage report generated"
+            # "✓ partition: Compiled successfully, 61 tests passed"
 
             if "starting compile phase" in line_lower:
                 self.tracker.update(target_service, "compiling", "Compiling", phase="compile")
 
             elif "starting test phase" in line_lower:
                 self.tracker.update(target_service, "testing", "Testing", phase="test")
-
-            elif "starting coverage phase" in line_lower:
-                self.tracker.update(target_service, "coverage", "Coverage", phase="coverage")
 
             elif "compiled successfully" in line_lower:
                 # PRIORITY 2: Parse AI summary (fallback for compatibility)
@@ -292,11 +288,11 @@ class TestRunner(BaseRunner):
 
                     self.logger.debug(f"[{target_service}] Using AI summary test count as fallback: {tests_run} tests")
                     self.tracker.update(target_service, "test_success", "Complete",
-                                      phase="coverage", tests_run=tests_run, tests_failed=0)
+                                      phase="test", tests_run=tests_run, tests_failed=0)
                 else:
                     # Maven already provided test count, just update phase
                     self.logger.debug(f"[{target_service}] Maven test count already captured ({current_tests}), skipping AI summary")
-                    self.tracker.update(target_service, "test_success", "Complete", phase="coverage")
+                    self.tracker.update(target_service, "test_success", "Complete", phase="test")
 
         # Detect errors
         if "build failure" in line_lower and target_service:
@@ -378,6 +374,9 @@ class TestRunner(BaseRunner):
 
             # Validate test counts against surefire reports (ensures deterministic, accurate counts)
             self._validate_test_counts()
+
+            # Generate coverage reports in parallel (Python-driven, deterministic)
+            self._generate_coverage_reports()
 
             # Extract coverage from JaCoCo reports (post-processing)
             self._extract_coverage_from_reports()
@@ -743,6 +742,158 @@ class TestRunner(BaseRunner):
                     self.logger.info(f"[{service}] Test count validated: {actual_count} tests")
 
         self.logger.info("Test count validation complete")
+
+    def _generate_coverage_for_service(self, service: str) -> tuple[bool, str]:
+        """Generate coverage reports for a single service."""
+        # Locate service directory
+        base_path = Path.cwd() / "repos" / service
+        if not base_path.exists():
+            base_path = Path.cwd() / service
+
+        if not base_path.exists():
+            msg = "Service directory not found"
+            self.logger.warning(f"[{service}] {msg}")
+            return (False, msg)
+
+        pom_path = base_path / "pom.xml"
+        if not pom_path.exists():
+            msg = "No pom.xml found"
+            self.logger.warning(f"[{service}] {msg}")
+            return (False, msg)
+
+        try:
+            pom_content = pom_path.read_text(encoding='utf-8')
+        except Exception as exc:
+            pom_content = ""
+            self.logger.debug(f"[{service}] Failed to read pom.xml: {exc}")
+
+        has_root_jacoco = "jacoco-maven-plugin" in pom_content
+
+        # Identify module directories for each requested profile
+        modules_by_profile: Dict[str, List[Path]] = {}
+        for profile in self.profiles:
+            try:
+                module_dirs = self._map_profile_to_modules(service, base_path, profile)
+            except Exception as exc:
+                self.logger.debug(f"[{service}] Failed mapping profile '{profile}': {exc}")
+                module_dirs = []
+
+            if module_dirs:
+                modules_by_profile[profile] = module_dirs
+
+        modules_to_process: Dict[Path, Set[str]] = {}
+        for profile, module_dirs in modules_by_profile.items():
+            for module_dir in module_dirs:
+                modules_to_process.setdefault(module_dir, set()).add(profile)
+
+        if has_root_jacoco and base_path not in modules_to_process:
+            modules_to_process[base_path] = set()
+
+        if not modules_to_process:
+            if has_root_jacoco:
+                modules_to_process[base_path] = set()
+            else:
+                msg = "JaCoCo plugin not configured for requested profiles"
+                self.logger.warning(f"[{service}] {msg}")
+                return (False, msg)
+
+        coverage_timeout = 60  # seconds
+        success_modules: List[str] = []
+        failed_modules: List[str] = []
+        failure_messages: List[str] = []
+
+        for module_dir, profiles in modules_to_process.items():
+            module_rel = (
+                module_dir.relative_to(base_path).as_posix()
+                if module_dir != base_path else "."
+            )
+            profile_label = ",".join(sorted(profiles)) if profiles else "all"
+            self.logger.info(
+                f"[{service}] Generating coverage for module {module_rel} (profiles: {profile_label})"
+            )
+
+            cmd = ["mvn", "jacoco:report", "-DskipTests"]
+            self.logger.debug(f"[{service}] Command ({module_rel}): {' '.join(cmd)}")
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=module_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=coverage_timeout,
+                    check=False,
+                )
+
+                if result.returncode == 0:
+                    self.logger.info(
+                        f"[{service}] ✓ Coverage generation succeeded for module {module_rel}"
+                    )
+                    if "BUILD SUCCESS" in result.stdout:
+                        self.logger.debug(
+                            f"[{service}] {module_rel}: Maven reported BUILD SUCCESS"
+                        )
+                    success_modules.append(module_rel)
+                else:
+                    stderr_preview = result.stderr[:500] if result.stderr else "No stderr"
+                    msg = (
+                        f"{module_rel} failed (exit code {result.returncode}) - {stderr_preview}"
+                    )
+                    self.logger.error(f"[{service}] ✗ {msg}")
+                    if result.stdout:
+                        self.logger.debug(f"[{service}] {module_rel} stdout:\n{result.stdout}")
+                    if result.stderr:
+                        self.logger.debug(f"[{service}] {module_rel} stderr:\n{result.stderr}")
+                    failed_modules.append(module_rel)
+                    failure_messages.append(msg)
+
+            except subprocess.TimeoutExpired:
+                msg = f"{module_rel} timed out after {coverage_timeout}s"
+                self.logger.error(f"[{service}] ✗ {msg}")
+                failed_modules.append(module_rel)
+                failure_messages.append(msg)
+
+            except FileNotFoundError:
+                msg = "Maven command not found"
+                self.logger.error(f"[{service}] ✗ {msg}")
+                return (False, msg)
+
+            except Exception as exc:
+                msg = f"{module_rel} unexpected error: {exc}"
+                self.logger.error(f"[{service}] ✗ {msg}")
+                import traceback
+                self.logger.debug(f"[{service}] Traceback:\n{traceback.format_exc()}")
+                failed_modules.append(module_rel)
+                failure_messages.append(msg)
+
+        if success_modules:
+            summary = f"{len(success_modules)}/{len(modules_to_process)} module(s) generated coverage"
+            if len(success_modules) <= 3:
+                summary += f" ({', '.join(success_modules)})"
+            return (True, summary)
+
+        msg = failure_messages[0] if failure_messages else "Coverage generation failed"
+        return (False, msg)
+
+    def _generate_coverage_reports(self):
+        """Generate JaCoCo coverage reports with sequential feedback."""
+        console.print("\n[cyan]📊 Generating Coverage Reports...[/cyan]")
+
+        for service in self.services:
+            self.tracker.update(service, "coverage", "Generating coverage", phase="coverage")
+
+        for service in self.services:
+            console.print(f"  → {service}: generating coverage…", style="cyan")
+            success, message = self._generate_coverage_for_service(service)
+
+            if success:
+                console.print(f"    [green]✓[/green] {service}: {message}")
+                self.tracker.update(service, "test_success", message, phase="coverage")
+            else:
+                console.print(f"    [yellow]⚠[/yellow] {service}: {message}")
+                self.tracker.update(service, "test_success", f"Coverage: {message}", phase="coverage")
+
+        console.print("[dim]Coverage generation complete[/dim]\n")
 
     def _extract_coverage_from_csv(self, service: str, base_path: Path, profile: str = None) -> tuple[float, float]:
         """
@@ -1639,4 +1790,3 @@ class TestRunner(BaseRunner):
         else:
             # Single profile: use original quality panel
             return self.get_quality_panel()
-

@@ -226,45 +226,7 @@ TEST_PHASE:
         - All passed: "✓ All X tests passed"
         - Some failed: "✗ Y of X tests failed" with failure details
     - If tests fail:
-        - Continue to COVERAGE_PHASE (coverage can still be generated)
-
-COVERAGE_PHASE:
-    - Only execute if TEST_PHASE completed (regardless of pass/fail)
-    - Check if JaCoCo is configured (look for jacoco-maven-plugin in pom.xml)
-    - If JaCoCo is available:
-        - CRITICAL: Execute coverage generation with THE SAME PROFILES used in TEST_PHASE
-        - Command: mvn jacoco:report -P{profiles}
-        - Example (single): mvn jacoco:report -Pazure
-        - Example (multi): mvn jacoco:report -Pcore,core-plus,azure
-        - This ensures per-module coverage reports are generated for each tested profile
-        - Monitor output for coverage generation
-        - Parse coverage report if available:
-            - Look for coverage percentages in output
-            - Extract line coverage: "Line coverage: X%"
-            - Extract branch coverage: "Branch coverage: Y%"
-        - Report coverage:
-            - "📊 Coverage: Line X%, Branch Y%"
-            - If coverage data not available: "Coverage report generated in target/site/jacoco/"
-    - If JaCoCo not configured:
-        - Skip this phase
-        - Report: "Coverage plugin not configured"
-
-    MULTI-PROFILE COVERAGE:
-    - When multiple profiles are specified (e.g., core,core-plus,azure), coverage is extracted per profile
-    - The test runner automatically:
-        1. Maps each profile to its corresponding Maven module(s) by examining directory structure
-        2. Reads per-module JaCoCo CSV reports from {module}/target/site/jacoco/jacoco.csv
-        3. Aggregates coverage data at the service level
-    - Module detection patterns (in order of priority):
-        1. {service}-{profile}/ (e.g., partition-core/, partition-azure/)
-        2. providers/{service}-{profile}/ (e.g., providers/partition-azure/)
-        3. provider/{service}-{profile}/ (singular)
-        4. Any subdirectory containing the profile name (e.g., core/, azure-provider/)
-    - Special handling:
-        - "core" profile matches "partition-core" but NOT "partition-core-plus"
-        - "core-plus" profile only matches modules with "core-plus" or "coreplus" in the name
-    - Fallback: If no module directories are found, the runner falls back to filtering aggregated CSV by package names
-    - Consistency: Coverage parsing is deterministic and returns identical results across multiple runs
+        - Mark test phase complete (coverage will be handled by Python runner)
 
 ERROR_HANDLING:
     - If Maven command not found:
@@ -295,19 +257,16 @@ PHASE_START_FORMAT:
     Before starting each phase, announce it using EXACTLY this format:
     - "✓ {service}: Starting compile phase"
     - "✓ {service}: Starting test phase"
-    - "✓ {service}: Starting coverage phase"
 
     Examples:
     - "✓ partition: Starting compile phase"
     - "✓ legal: Starting test phase"
-    - "✓ schema: Starting coverage phase"
 
 PHASE_COMPLETION_FORMAT:
-    After each service completes ALL phases, provide a summary using EXACTLY this format:
+    After each service completes compile and test phases, provide a summary using EXACTLY this format:
 
     When tests exist and ran successfully:
-    - "✓ {service}: Compiled successfully, {N} tests passed, Coverage report generated"
-    - "✓ {service}: Compiled successfully, {N} tests passed" (if coverage failed/unavailable)
+    - "✓ {service}: Compiled successfully, {N} tests passed"
 
     When no tests are found (test count is 0 or no test classes exist):
     - "✓ {service}: Compiled successfully, 0 tests passed" (use 0, not "no tests found")
@@ -316,10 +275,12 @@ PHASE_COMPLETION_FORMAT:
     - "✗ {service}: Compilation failed" (skip this service and move to next)
 
     Examples:
-    - "✓ partition: Compiled successfully, 61 tests passed, Coverage report generated"
-    - "✓ entitlements: Compiled successfully, 7 tests passed, Coverage report generated"
+    - "✓ partition: Compiled successfully, 61 tests passed"
+    - "✓ entitlements: Compiled successfully, 7 tests passed"
     - "✓ indexer-queue: Compiled successfully, 0 tests passed" (service with no tests)
     - "✗ file: Compilation failed" (build error)
+
+    Note: Coverage generation is handled automatically by the Python test runner after test completion.
 
 IMPORTANT PARSING RULES:
     - Always use lowercase service names in status updates (partition, not Partition)
@@ -362,15 +323,13 @@ Example 1: Single service with single provider (azure)
            [TEST_RESULTS:partition]
            profile=azure,tests_run=61,failures=0,errors=0,skipped=0
            [/TEST_RESULTS]
-        5. Execute: mvn jacoco:report -Pazure
     Output:
         ✓ partition: Starting compile phase
         ✓ partition: Starting test phase
         [TEST_RESULTS:partition]
         profile=azure,tests_run=61,failures=0,errors=0,skipped=0
         [/TEST_RESULTS]
-        ✓ partition: Starting coverage phase
-        ✓ partition: Compiled successfully, 61 tests passed, Coverage report generated
+        ✓ partition: Compiled successfully, 61 tests passed
 
 Example 2: Single service with multiple providers (core,core-plus,azure)
     Input: SERVICES=partition, PROVIDER=core,core-plus,azure
@@ -388,7 +347,6 @@ Example 2: Single service with multiple providers (core,core-plus,azure)
            profile=core,tests_run=61,failures=0,errors=0,skipped=0
            profile=azure,tests_run=61,failures=0,errors=0,skipped=0
            [/TEST_RESULTS]
-        5. Execute: mvn jacoco:report -Pcore,core-plus,azure
     Output:
         ✓ partition: Starting compile phase
         ✓ partition: Starting test phase
@@ -396,8 +354,7 @@ Example 2: Single service with multiple providers (core,core-plus,azure)
         profile=core,tests_run=61,failures=0,errors=0,skipped=0
         profile=azure,tests_run=61,failures=0,errors=0,skipped=0
         [/TEST_RESULTS]
-        ✓ partition: Starting coverage phase
-        ✓ partition: Compiled successfully, 122 tests passed, Coverage report generated
+        ✓ partition: Compiled successfully, 122 tests passed
 
 Example 3: Multiple services with multiple providers
     Input: SERVICES=partition,entitlements,legal, PROVIDER=core,core-plus,azure
