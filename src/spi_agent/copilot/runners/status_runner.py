@@ -1,9 +1,13 @@
 """Status runner for gathering GitHub repository information."""
 
 import json
+import logging
+import os
 import re
+import select
 import subprocess
 import textwrap
+import time
 from datetime import datetime
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -21,6 +25,8 @@ from spi_agent.copilot.constants import SERVICES
 from spi_agent.copilot.models import StatusResponse
 from spi_agent.copilot.trackers import StatusTracker
 
+logger = logging.getLogger(__name__)
+
 
 class StatusRunner(BaseRunner):
     """Runs Copilot CLI to gather GitHub status and displays results"""
@@ -29,6 +35,7 @@ class StatusRunner(BaseRunner):
         super().__init__(prompt_file, services)
         self.raw_output = []  # Keep full output for JSON extraction
         self.tracker = StatusTracker(services)
+        self.log_handle = None  # File handle for incremental logging
 
     @property
     def log_prefix(self) -> str:
@@ -120,7 +127,7 @@ class StatusRunner(BaseRunner):
         if data:
             return data
 
-        console.print("[yellow]Warning:[/yellow] Could not extract JSON from any known format")
+        logger.warning("Could not extract JSON from any known format")
         return None
 
     def _parse_json_candidate(self, candidate: str, context: str) -> Optional[Dict]:
@@ -144,7 +151,7 @@ class StatusRunner(BaseRunner):
                 last_error = exc
 
         if last_error:
-            console.print(f"[dim]{context} JSON parse failed: {last_error}[/dim]")
+            logger.debug(f"{context} JSON parse failed: {last_error}")
         return None
 
     @staticmethod
@@ -561,14 +568,33 @@ class StatusRunner(BaseRunner):
         console.print()
 
     def run(self) -> int:
-        """Execute copilot to gather status with live output"""
+        """Execute copilot to gather status with live output and process monitoring"""
         global current_process
 
         self.show_config()
         console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
 
         prompt_content = self.load_prompt()
-        command = ["copilot", "-p", prompt_content, "--allow-all-tools"]
+
+        # Use model from environment or default to Claude Sonnet 4.5
+        model = os.getenv("SPI_AGENT_COPILOT_MODEL", "claude-sonnet-4.5")
+        command = ["copilot", "--model", model, "-p", prompt_content, "--allow-all-tools"]
+
+        # Open log file for incremental writes
+        try:
+            self.log_handle = open(self.log_file, "w", buffering=1)  # Line buffering
+            # Write header
+            self.log_handle.write(f"{'='*70}\n")
+            self.log_handle.write("Copilot Status Check Log (Streaming)\n")
+            self.log_handle.write(f"{'='*70}\n")
+            self.log_handle.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            self.log_handle.write(f"Services: {', '.join(self.services)}\n")
+            self.log_handle.write(f"{'='*70}\n\n")
+            self.log_handle.write("=== RAW OUTPUT (streaming) ===\n\n")
+            self.log_handle.flush()
+        except Exception as e:
+            logger.error(f"Failed to open log file: {e}")
+            self.log_handle = None
 
         try:
             # Start process with streaming output
@@ -585,43 +611,42 @@ class StatusRunner(BaseRunner):
             # Set global process for signal handler
             current_process = process
 
+            # Log process start
+            logger.info(f"Started copilot process PID={process.pid}")
+            debug_msg = f"[DEBUG] Started copilot process PID={process.pid}"
+            self._write_to_log(debug_msg)
+
             # Create split layout
             layout = self.create_layout()
             layout["status"].update(self.tracker.get_table())
             layout["output"].update(self._output_panel_renderable)
 
             # Live display with split view
-            with Live(layout, console=console, refresh_per_second=4) as live:
-                # Read stdout line by line
-                if process.stdout:
-                    for line in process.stdout:
-                        line = line.rstrip()
-                        if line:
-                            # Add to both buffers
-                            self.output_lines.append(line)
-                            self.raw_output.append(line)
+            with Live(layout, console=console, refresh_per_second=4, transient=False) as live:
+                # Enhanced output reading with process monitoring
+                self._read_output_with_monitoring(process, layout)
 
-                            # Parse for status updates
-                            self.parse_output(line)
+                # Final process wait (should already be done, but just in case)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning("Process did not exit after output reading completed, terminating")
+                    process.terminate()
+                    process.wait(timeout=2)
 
-                            # Update both panels
-                            layout["status"].update(self.tracker.get_table())
-                            layout["output"].update(self._output_panel_renderable)
-
-                # Wait for process to complete
-                process.wait()
+                # Log completion
+                logger.info(f"Process exited with return code: {process.returncode}")
+                debug_msg = f"[DEBUG] Process exited with return code: {process.returncode}"
+                self._write_to_log(debug_msg)
 
                 # Mark any remaining services as gathered (if copilot succeeded)
                 if process.returncode == 0:
                     for service in self.services:
                         if self.tracker.services[service]["status"] in ["pending", "querying"]:
                             self.tracker.update(service, "gathered", "Data collected")
+                    # Note: Don't call live.refresh() here - it interferes with transient cleanup
 
-                    # Update table one final time
-                    layout["status"].update(self.tracker.get_table())
-                    live.refresh()
-
-            console.print()  # Add spacing
+            console.print()  # Add spacing after Live context exits
 
             if process.returncode != 0:
                 console.print(f"[red]Error:[/red] Copilot failed with exit code {process.returncode}")
@@ -635,31 +660,32 @@ class StatusRunner(BaseRunner):
             try:
                 with open(raw_debug_file, "w") as f:
                     f.write(full_output)
-                console.print(f"[dim]Debug: Saved raw output to {raw_debug_file}[/dim]")
-            except Exception:
-                pass
+                logger.info(f"Saved raw output to {raw_debug_file}")
+                debug_msg = f"[DEBUG] Saved raw output to {raw_debug_file}"
+                self._write_to_log(debug_msg)
+            except Exception as e:
+                logger.warning(f"Could not save raw output: {e}")
 
             status_data = self.extract_json(full_output)
 
             if not status_data:
                 console.print("[red]Error:[/red] Could not extract JSON from copilot output")
-                console.print("\n[dim]Raw output (first 2000 chars):[/dim]")
-                console.print(full_output[:2000])
-                console.print(f"\n[dim]Total output length: {len(full_output)} chars[/dim]")
-                console.print(f"[dim]Output ends with: ...{full_output[-200:]}[/dim]")
+                logger.error("Could not extract JSON from copilot output")
+                logger.debug(f"Raw output (first 2000 chars): {full_output[:2000]}")
+                logger.debug(f"Total output length: {len(full_output)} chars")
+                logger.debug(f"Output ends with: ...{full_output[-200:]}")
                 return 1
 
             # Validate JSON with Pydantic
             try:
                 validated_data = StatusResponse(**status_data)
-                console.print("[dim]✓ Data validated successfully[/dim]\n")
+                logger.info("Data validated successfully")
 
                 # Convert back to dict for display (with validated data)
                 status_data = validated_data.model_dump()
 
             except ValidationError as e:
-                console.print("[yellow]Warning:[/yellow] Data validation failed, using raw data")
-                console.print(f"[dim]Validation errors: {e.error_count()} field(s)[/dim]\n")
+                logger.warning(f"Data validation failed, using raw data. Errors: {e.error_count()} field(s)")
                 # Continue with raw data
 
             # Display the results
@@ -682,33 +708,221 @@ class StatusRunner(BaseRunner):
             traceback.print_exc()
             return 1
         finally:
+            # Close log file if open
+            if self.log_handle and not self.log_handle.closed:
+                try:
+                    self.log_handle.write(f"\n\n{'='*70}\n")
+                    self.log_handle.write(f"Log closed at: {datetime.now().isoformat()}\n")
+                    self.log_handle.close()
+                except Exception as e:
+                    logger.warning(f"Error closing log file: {e}")
+
             # Clear global process reference
             current_process = None
 
-    def _save_log(self, return_code: int, status_data: Optional[Dict] = None):
-        """Save execution log to file"""
-        try:
-            with open(self.log_file, "w") as f:
-                f.write(f"{'='*70}\n")
-                f.write("Copilot Status Check Log\n")
-                f.write(f"{'='*70}\n")
-                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                f.write(f"Services: {', '.join(self.services)}\n")
-                f.write(f"Exit Code: {return_code}\n")
-                f.write(f"{'='*70}\n\n")
+    def _read_output_with_monitoring(self, process: subprocess.Popen, layout) -> None:
+        """
+        Read process output with monitoring to prevent hanging.
 
-                # Write raw output
-                f.write("=== RAW OUTPUT ===\n\n")
-                f.write("\n".join(self.raw_output))
+        Uses select() to check for available data and polls process status
+        to detect when the process exits, even if stdout isn't properly closed.
+
+        Implements a hard timeout to prevent indefinite hangs.
+
+        Args:
+            process: The subprocess to monitor
+            layout: Rich layout for updating UI
+        """
+        if not process.stdout:
+            logger.warning("No stdout available from process")
+            debug_msg = "[DEBUG] No stdout available from process"
+            self._write_to_log(debug_msg)
+            return
+
+        logger.info("Starting output reading loop")
+        debug_msg = "[DEBUG] Starting output reading loop"
+        self._write_to_log(debug_msg)
+
+        # Timeout configuration
+        start_time = time.time()
+        max_timeout = 300  # 5 minutes hard timeout
+        last_output_time = time.time()
+        output_timeout = 30  # Seconds of silence before logging a warning
+        line_count = 0
+        poll_interval = 0.5  # Check for output every 0.5 seconds
+
+        # Main reading loop: continue while process is running
+        while process.poll() is None:
+            # Check for hard timeout
+            elapsed = time.time() - start_time
+            if elapsed > max_timeout:
+                logger.error(f"Copilot process exceeded {max_timeout}s timeout, terminating")
+                error_msg = f"[ERROR] Process exceeded {max_timeout}s timeout (elapsed: {elapsed:.1f}s)"
+                self._write_to_log(error_msg)
+
+                # Graceful termination
+                console.print(f"\n[red]Timeout:[/red] Copilot exceeded {max_timeout}s limit, terminating gracefully...")
+                process.terminate()
+
+                # Give it 10 seconds to cleanup
+                try:
+                    process.wait(timeout=10)
+                    logger.info("Process terminated gracefully")
+                    self._write_to_log("[DEBUG] Process terminated gracefully after timeout")
+                except subprocess.TimeoutExpired:
+                    logger.warning("Process did not terminate gracefully, forcing kill")
+                    self._write_to_log("[DEBUG] Process did not terminate gracefully, forcing kill")
+                    process.kill()
+                    process.wait()
+                    self._write_to_log("[DEBUG] Process killed forcefully")
+
+                break
+
+            # Use select to check if data is available (non-blocking)
+            try:
+                ready, _, _ = select.select([process.stdout], [], [], poll_interval)
+            except Exception as e:
+                logger.error(f"select() failed: {e}")
+                debug_msg = f"[DEBUG] select() failed: {e}"
+                self._write_to_log(debug_msg)
+                break
+
+            if ready:
+                # Data is available, read one line
+                try:
+                    line = process.stdout.readline()
+                    if not line:
+                        # EOF reached while process still running (unusual but possible)
+                        logger.info("EOF reached while process still running")
+                        debug_msg = "[DEBUG] EOF reached while process still running"
+                        self._write_to_log(debug_msg)
+                        break
+
+                    line = line.rstrip()
+                    if line:
+                        line_count += 1
+                        # Add to both buffers
+                        self.output_lines.append(line)
+                        self.raw_output.append(line)
+
+                        # Write to log file immediately
+                        self._write_to_log(line)
+
+                        # Parse for status updates
+                        self.parse_output(line)
+
+                        # Update both panels
+                        layout["status"].update(self.tracker.get_table())
+                        layout["output"].update(self._output_panel_renderable)
+
+                        # Reset timeout timer
+                        last_output_time = time.time()
+
+                        # Log progress periodically
+                        if line_count % 50 == 0:
+                            logger.debug(f"Read {line_count} lines so far")
+
+                except Exception as e:
+                    logger.error(f"Error reading line: {e}")
+                    debug_msg = f"[DEBUG] Error reading line: {e}"
+                    self._write_to_log(debug_msg)
+                    break
+            else:
+                # No data available, check for timeout
+                silence_duration = time.time() - last_output_time
+
+                if silence_duration > output_timeout:
+                    # Log warning but continue waiting
+                    logger.info(f"No output for {silence_duration:.0f}s, process still running (PID={process.pid})")
+                    debug_msg = f"[DEBUG] No output for {silence_duration:.0f}s, process still running"
+                    self._write_to_log(debug_msg)
+                    # Reset timer to avoid spamming logs
+                    last_output_time = time.time()
+
+        # Process has exited - log final status
+        logger.info(f"Process poll() returned {process.returncode}, draining remaining output")
+        debug_msg = f"[DEBUG] Process exited (returncode={process.returncode}), draining remaining output"
+        self._write_to_log(debug_msg)
+
+        # Drain any remaining output from stdout buffer
+        drained_lines = 0
+        try:
+            for line in process.stdout:
+                line = line.rstrip()
+                if line:
+                    drained_lines += 1
+                    self.output_lines.append(line)
+                    self.raw_output.append(line)
+                    self._write_to_log(line)
+                    self.parse_output(line)
+                    layout["status"].update(self.tracker.get_table())
+                    layout["output"].update(self._output_panel_renderable)
+        except Exception as e:
+            logger.warning(f"Error draining output: {e}")
+            debug_msg = f"[DEBUG] Error draining output: {e}"
+            self._write_to_log(debug_msg)
+
+        logger.info(f"Output reading complete. Total lines: {line_count}, drained: {drained_lines}")
+        debug_msg = f"[DEBUG] Output reading complete. Total lines: {line_count}, drained: {drained_lines}"
+        self._write_to_log(debug_msg)
+
+    def _write_to_log(self, line: str) -> None:
+        """Write a line to the log file immediately (incremental logging).
+
+        Args:
+            line: Line to write to the log file
+        """
+        if self.log_handle and not self.log_handle.closed:
+            try:
+                self.log_handle.write(line + "\n")
+                self.log_handle.flush()  # Ensure immediate write for tail -f
+            except Exception as e:
+                logger.warning(f"Error writing to log file: {e}")
+
+    def _save_log(self, return_code: int, status_data: Optional[Dict] = None):
+        """Append final metadata to the streaming log file.
+
+        Since raw output is already written incrementally during execution,
+        this method only appends the exit code and extracted JSON.
+        """
+        if not self.log_handle or self.log_handle.closed:
+            # Fallback: log file wasn't opened, write everything now
+            try:
+                with open(self.log_file, "w") as f:
+                    f.write(f"{'='*70}\n")
+                    f.write("Copilot Status Check Log (Post-mortem)\n")
+                    f.write(f"{'='*70}\n")
+                    f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                    f.write(f"Services: {', '.join(self.services)}\n")
+                    f.write(f"Exit Code: {return_code}\n")
+                    f.write(f"{'='*70}\n\n")
+                    f.write("=== RAW OUTPUT ===\n\n")
+                    f.write("\n".join(self.raw_output))
+                    if status_data:
+                        f.write("\n\n=== EXTRACTED JSON ===\n\n")
+                        f.write(json.dumps(status_data, indent=2))
+            except Exception as e:
+                console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
+                return
+
+        else:
+            # Normal case: append final sections to streaming log
+            try:
+                self.log_handle.write(f"\n\n{'='*70}\n")
+                self.log_handle.write(f"Exit Code: {return_code}\n")
+                self.log_handle.write(f"{'='*70}\n")
 
                 # Write extracted JSON if available
                 if status_data:
-                    f.write("\n\n=== EXTRACTED JSON ===\n\n")
-                    f.write(json.dumps(status_data, indent=2))
+                    self.log_handle.write("\n=== EXTRACTED JSON ===\n\n")
+                    self.log_handle.write(json.dumps(status_data, indent=2))
+                    self.log_handle.write("\n")
 
-            console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
-        except Exception as e:
-            console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
+                self.log_handle.flush()
+            except Exception as e:
+                logger.warning(f"Error appending to log file: {e}")
+
+        console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
 
     def get_results_panel(self, return_code: int) -> Panel:
         """Generate final results panel.
@@ -721,4 +935,3 @@ class StatusRunner(BaseRunner):
             title="✓ Status Check Complete" if return_code == 0 else "✗ Status Check Failed",
             border_style="green" if return_code == 0 else "red"
         )
-

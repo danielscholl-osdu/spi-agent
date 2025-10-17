@@ -1,6 +1,7 @@
 """Test runner for executing Maven tests with coverage analysis."""
 
 import logging
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -308,7 +309,10 @@ class TestRunner(BaseRunner):
         console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
 
         prompt_content = self.load_prompt()
-        command = ["copilot", "-p", prompt_content, "--allow-all-tools"]
+
+        # Use model from environment or default to Claude Sonnet 4.5
+        model = os.getenv("SPI_AGENT_COPILOT_MODEL", "claude-sonnet-4.5")
+        command = ["copilot", "--model", model, "-p", prompt_content, "--allow-all-tools"]
 
         try:
             process = subprocess.Popen(
