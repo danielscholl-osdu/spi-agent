@@ -877,23 +877,36 @@ class TestRunner(BaseRunner):
 
     def _generate_coverage_reports(self):
         """Generate JaCoCo coverage reports with sequential feedback."""
-        console.print("\n[cyan]📊 Generating Coverage Reports...[/cyan]")
+        # Add blank line and header to output panel
+        self.output_lines.append("")
+        self.output_lines.append("📊 Generating Coverage Reports...")
+        self.full_output.append("")
+        self.full_output.append("📊 Generating Coverage Reports...")
 
         for service in self.services:
             self.tracker.update(service, "coverage", "Generating coverage", phase="coverage")
 
         for service in self.services:
-            console.print(f"  → {service}: generating coverage…", style="cyan")
+            msg = f"  → {service}: generating coverage…"
+            self.output_lines.append(msg)
+            self.full_output.append(msg)
+
             success, message = self._generate_coverage_for_service(service)
 
             if success:
-                console.print(f"    [green]✓[/green] {service}: {message}")
+                result_msg = f"    ✓ {service}: {message}"
+                self.output_lines.append(result_msg)
+                self.full_output.append(result_msg)
                 self.tracker.update(service, "test_success", message, phase="coverage")
             else:
-                console.print(f"    [yellow]⚠[/yellow] {service}: {message}")
+                result_msg = f"    ⚠ {service}: {message}"
+                self.output_lines.append(result_msg)
+                self.full_output.append(result_msg)
                 self.tracker.update(service, "test_success", f"Coverage: {message}", phase="coverage")
 
-        console.print("[dim]Coverage generation complete[/dim]\n")
+        completion_msg = "Coverage generation complete"
+        self.output_lines.append(completion_msg)
+        self.full_output.append(completion_msg)
 
     def _extract_coverage_from_csv(self, service: str, base_path: Path, profile: str = None) -> tuple[float, float]:
         """
