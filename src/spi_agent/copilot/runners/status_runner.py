@@ -112,7 +112,28 @@ class StatusRunner(BaseRunner):
                         self.tracker.update(service, "error", "Failed to gather data")
 
     def extract_json(self, output: str) -> Optional[Dict]:
-        """Extract JSON from copilot output (may be wrapped in markdown)"""
+        """Extract JSON from copilot output (may be wrapped in markdown or shell commands)"""
+        # First check for heredoc patterns (cat << 'EOF' ... EOF)
+        heredoc_match = re.search(r"cat\s*<<\s*['\"]?EOF['\"]?\s*\n(.*?)\n\s*EOF", output, re.DOTALL)
+        if heredoc_match:
+            data = self._parse_json_candidate(heredoc_match.group(1), "heredoc")
+            if data:
+                return data
+
+        # Check for $ cat << 'EOF' pattern with indentation
+        shell_heredoc = re.search(r"\$\s*cat\s*<<\s*['\"]?EOF['\"]?\s*\n(.*?)\n\s*EOF", output, re.DOTALL)
+        if shell_heredoc:
+            data = self._parse_json_candidate(shell_heredoc.group(1), "shell heredoc")
+            if data:
+                return data
+
+        # Check for JSON preceded by a bullet point (●)
+        bullet_json = re.search(r'●\s*(\{.*?\n\s*\})', output, re.DOTALL)
+        if bullet_json:
+            data = self._parse_json_candidate(bullet_json.group(1), "bullet point JSON")
+            if data:
+                return data
+
         # Prefer explicit JSON code fences if present
         code_blocks = re.findall(r'```(?:json)?\s*\n(.*?)\n\s*```', output, re.DOTALL)
         for block in code_blocks:
@@ -125,10 +146,10 @@ class StatusRunner(BaseRunner):
         if data:
             return data
 
-        # Backwards compatibility: look for a block that clearly contains services data
-        json_match = re.search(r'(\{[\s\S]*?"services"[\s\S]*?\})\s*$', output, re.MULTILINE)
+        # Backwards compatibility: look for a block that clearly contains services/projects data
+        json_match = re.search(r'(\{[\s\S]*?"(?:services|projects)"[\s\S]*?\})\s*$', output, re.MULTILINE)
         if json_match:
-            data = self._parse_json_candidate(json_match.group(1), '"services" fallback')
+            data = self._parse_json_candidate(json_match.group(1), '"services/projects" fallback')
             if data:
                 return data
 
@@ -283,17 +304,21 @@ class StatusRunner(BaseRunner):
         summary_table.add_column("Last Update", style="dim")
 
         for service_name, service_data in services_data.items():
-            # Handle both GitHub (repo) and GitLab (project) keys
-            repo_or_project = service_data.get("project" if is_gitlab else "repo", {})
-            if not repo_or_project.get("exists", False):
-                summary_table.add_row(
-                    f"✗ {service_name}",
-                    "[dim]N/A[/dim]",
-                    "[dim]N/A[/dim]",
-                    "[dim]N/A[/dim]",
-                    "[red]Not found[/red]"
-                )
-                continue
+            # GitHub has "repo" key, GitLab now just has direct data
+            if not is_gitlab:
+                repo_or_project = service_data.get("repo", {})
+                if not repo_or_project.get("exists", False):
+                    summary_table.add_row(
+                        f"✗ {service_name}",
+                        "[dim]N/A[/dim]",
+                        "[dim]N/A[/dim]",
+                        "[dim]N/A[/dim]",
+                        "[red]Not found[/red]"
+                    )
+                    continue
+            else:
+                # For GitLab, if service is in output, it exists
+                repo_or_project = {"exists": True}
 
             issues_count = service_data.get("issues", {}).get("count", 0)
             prs_count = service_data.get("merge_requests" if is_gitlab else "pull_requests", {}).get("count", 0)
@@ -345,24 +370,25 @@ class StatusRunner(BaseRunner):
             else:
                 workflow_display = "[dim]None[/dim]"
 
-            # Last update - handle both GitHub and GitLab field names
-            if is_gitlab:
-                updated_at = repo_or_project.get("last_activity_at", "")
-            else:
+            # Last update - GitHub has it in repo, GitLab doesn't have it in simplified structure
+            if not is_gitlab:
                 updated_at = repo_or_project.get("updated_at", "")
-            if updated_at:
-                try:
-                    update_time = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
-                    now = datetime.now(update_time.tzinfo)
-                    delta = now - update_time
-                    if delta.seconds < 3600:
-                        time_ago = f"{delta.seconds // 60}m ago"
-                    else:
-                        time_ago = f"{delta.seconds // 3600}h ago"
-                except:
-                    time_ago = "recently"
+                if updated_at:
+                    try:
+                        update_time = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                        now = datetime.now(update_time.tzinfo)
+                        delta = now - update_time
+                        if delta.seconds < 3600:
+                            time_ago = f"{delta.seconds // 60}m ago"
+                        else:
+                            time_ago = f"{delta.seconds // 3600}h ago"
+                    except:
+                        time_ago = "recently"
+                else:
+                    time_ago = "unknown"
             else:
-                time_ago = "unknown"
+                # GitLab simplified structure doesn't include last_activity_at
+                time_ago = "N/A"
 
             summary_table.add_row(
                 f"✓ {service_name}",
