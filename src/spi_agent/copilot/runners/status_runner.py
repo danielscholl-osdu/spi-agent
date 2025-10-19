@@ -652,6 +652,100 @@ class StatusRunner(BaseRunner):
             console.print(workflow_table)
             console.print()
 
+        # Failed Pipeline Jobs Section (GitLab only)
+        if is_gitlab:
+            # Collect all failed pipelines with jobs
+            failed_pipeline_jobs = []
+            for service_name in services_data.keys():
+                mr_pipeline_tuples = mr_pipelines.get(service_name, [])
+                for mr_iid, pipeline in mr_pipeline_tuples:
+                    if pipeline.get("status") == "failed" and pipeline.get("jobs"):
+                        failed_pipeline_jobs.append({
+                            "service": service_name,
+                            "mr_iid": mr_iid,
+                            "pipeline": pipeline
+                        })
+
+            if failed_pipeline_jobs:
+                # Display failed pipeline jobs grouped by stage
+                for item in failed_pipeline_jobs:
+                    service_name = item["service"]
+                    mr_iid = item["mr_iid"]
+                    pipeline = item["pipeline"]
+                    pipeline_id = pipeline.get("id")
+                    jobs = pipeline.get("jobs", [])
+
+                    # Create job table grouped by stage
+                    job_table = Table(
+                        title=f"❌ Failed Jobs - {service_name} Pipeline #{pipeline_id} (MR !{mr_iid})",
+                        expand=False
+                    )
+                    job_table.add_column("Stage", style="cyan", no_wrap=True)
+                    job_table.add_column("Job Name", style="white")
+                    job_table.add_column("Status", style="magenta", justify="center")
+                    job_table.add_column("Duration", style="dim", justify="right")
+
+                    # Group jobs by stage and sort
+                    stage_order = ["review", "build", "csp-build", "coverage", "containerize", "scan", "deploy", "integration", "acceptance", "publish"]
+                    jobs_by_stage = {}
+                    for job in jobs:
+                        stage = job.get("stage", "unknown")
+                        if stage not in jobs_by_stage:
+                            jobs_by_stage[stage] = []
+                        jobs_by_stage[stage].append(job)
+
+                    # Sort stages by predefined order, with unknown stages at end
+                    sorted_stages = sorted(
+                        jobs_by_stage.keys(),
+                        key=lambda s: stage_order.index(s) if s in stage_order else 999
+                    )
+
+                    # Add rows to table
+                    for stage_idx, stage in enumerate(sorted_stages):
+                        stage_jobs = jobs_by_stage[stage]
+                        for job_idx, job in enumerate(stage_jobs):
+                            job_name = job.get("name", "Unknown")
+                            status = job.get("status", "unknown")
+                            duration = job.get("duration", 0)
+
+                            # Format status with icons and colors
+                            if status == "success":
+                                status_display = "[green]✓ success[/green]"
+                            elif status == "failed":
+                                status_display = "[red]✗ failed[/red]"
+                            elif status == "canceled":
+                                status_display = "[yellow]⊘ canceled[/yellow]"
+                            elif status == "skipped":
+                                status_display = "[dim]⊘ skipped[/dim]"
+                            elif status in ["running", "pending"]:
+                                status_display = f"[yellow]▶ {status}[/yellow]"
+                            else:
+                                status_display = f"[dim]{status}[/dim]"
+
+                            # Format duration
+                            if duration:
+                                if duration < 60:
+                                    duration_str = f"{duration}s"
+                                elif duration < 3600:
+                                    duration_str = f"{duration // 60}m {duration % 60}s"
+                                else:
+                                    duration_str = f"{duration // 3600}h {(duration % 3600) // 60}m"
+                            else:
+                                duration_str = "-"
+
+                            # Only show stage name on first job in that stage
+                            stage_display = stage if job_idx == 0 else ""
+
+                            job_table.add_row(
+                                stage_display,
+                                job_name,
+                                status_display,
+                                duration_str
+                            )
+
+                    console.print(job_table)
+                    console.print()
+
         # Next Steps / Quick Actions
         next_steps = []
 
@@ -677,6 +771,7 @@ class StatusRunner(BaseRunner):
         if is_gitlab:
             # GitLab pipelines - check for failed pipelines (from MR-specific data)
             failed_pipelines = {}
+            failed_jobs_summary = {}
             running_count = 0
 
             for service_name in services_data.keys():
@@ -687,14 +782,31 @@ class StatusRunner(BaseRunner):
                 if failed:
                     failed_pipelines[service_name] = len(failed)
 
+                    # Collect failed job stages for actionable guidance
+                    for pipeline in failed:
+                        if pipeline.get("jobs"):
+                            for job in pipeline.get("jobs", []):
+                                if job.get("status") == "failed":
+                                    stage = job.get("stage", "unknown")
+                                    if service_name not in failed_jobs_summary:
+                                        failed_jobs_summary[service_name] = set()
+                                    failed_jobs_summary[service_name].add(stage)
+
                 running = [p for p in pipelines if p.get("status") in ["running", "pending", "created"]]
                 running_count += len(running)
 
             if failed_pipelines:
-                total_failed = sum(failed_pipelines.values())
-                services_list = ", ".join(failed_pipelines.keys())
-                next_steps.append(f"[red]✗ {total_failed} failed MR pipeline(s)[/red]")
-                next_steps.append(f"  Services: {services_list}")
+                # Provide stage-specific guidance instead of generic message
+                if failed_jobs_summary:
+                    for service, stages in failed_jobs_summary.items():
+                        stages_str = ", ".join(sorted(stages))
+                        next_steps.append(f"[red]✗[/red] Review failed {stages_str} stage(s) in {service}")
+                else:
+                    # Fallback to generic message if no job details available
+                    total_failed = sum(failed_pipelines.values())
+                    services_list = ", ".join(failed_pipelines.keys())
+                    next_steps.append(f"[red]✗ {total_failed} failed MR pipeline(s)[/red]")
+                    next_steps.append(f"  Services: {services_list}")
 
             if running_count > 0:
                 next_steps.append(f"[yellow]▶[/yellow] {running_count} MR pipeline(s) still running")

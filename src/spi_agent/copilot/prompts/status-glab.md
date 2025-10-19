@@ -91,6 +91,40 @@ For each service, execute the following commands:
     - Other pipelines are triggered by branch pushes (source: push)
     - Both are relevant for understanding MR health and status
 
+5. GET_FAILED_PIPELINE_JOBS:
+    For EACH pipeline with status="failed", execute:
+    $ glab api projects/{PROJECT_PATH_ENCODED}/pipelines/{PIPELINE_ID}/jobs --hostname {GITLAB_HOST} --paginate 2>/dev/null || echo "[]"
+    Purpose: Get detailed job information for failed pipelines to identify what failed
+
+    IMPORTANT PATH ENCODING:
+    - PROJECT_PATH must be URL-encoded (replace / with %2F)
+    - Example: "osdu/platform/system/partition" becomes "osdu%2Fplatform%2Fsystem%2Fpartition"
+    - Extract PROJECT_PATH from UPSTREAM_URL by removing protocol and .git suffix
+    - GITLAB_HOST is the domain from UPSTREAM_URL (e.g., community.opengroup.org)
+
+    EXAMPLE:
+    If UPSTREAM_URL is "https://community.opengroup.org/osdu/platform/system/partition.git":
+    - PROJECT_PATH = "osdu/platform/system/partition"
+    - PROJECT_PATH_ENCODED = "osdu%2Fplatform%2Fsystem%2Fpartition"
+    - GITLAB_HOST = "community.opengroup.org"
+    - PIPELINE_ID = pipeline.id
+    Command: glab api projects/osdu%2Fplatform%2Fsystem%2Fpartition/pipelines/333828/jobs --hostname community.opengroup.org --paginate
+
+    STORAGE:
+    - Add a "jobs" array to each failed pipeline object
+    - Parse the JSON array response directly (glab api returns array of jobs)
+    - If command fails or returns nothing, set "jobs": []
+
+    JOB FIELDS TO EXTRACT (from glab api response):
+    - id: Job ID
+    - name: Job name
+    - stage: Pipeline stage (e.g., "review", "build", "test", "deploy")
+    - status: Job status (success, failed, canceled, skipped, manual)
+    - duration: Job duration in seconds (may be null)
+    - web_url: Job URL
+
+    NOTE: Only fetch jobs for failed pipelines to minimize API calls
+
 </GATHERING_TASKS>
 
 
@@ -159,7 +193,33 @@ IMPORTANT:
                 "sha": "xyz789abc123",
                 "created_at": "2025-01-17T07:00:00Z",
                 "duration": 85,
-                "web_url": "https://gitlab.com/osdu/platform/os-partition/-/pipelines/12340"
+                "web_url": "https://gitlab.com/osdu/platform/os-partition/-/pipelines/12340",
+                "jobs": [
+                  {
+                    "id": 98765,
+                    "name": "compile-and-unit-test",
+                    "stage": "build",
+                    "status": "success",
+                    "duration": 45,
+                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98765"
+                  },
+                  {
+                    "id": 98766,
+                    "name": "azure-containerize",
+                    "stage": "containerize",
+                    "status": "failed",
+                    "duration": 15,
+                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98766"
+                  },
+                  {
+                    "id": 98767,
+                    "name": "ibm-deploy",
+                    "stage": "deploy",
+                    "status": "canceled",
+                    "duration": 0,
+                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98767"
+                  }
+                ]
               },
               {
                 "id": 12335,
@@ -186,12 +246,15 @@ IMPORTANT RULES:
 5. If an MR has no pipelines, set "pipelines": [] (empty array)
 6. Include up to 5 most recent pipelines per MR
 7. Pipeline status values: "success", "failed", "running", "pending", "canceled", "skipped", "manual"
-8. When merging results from multiple provider queries, remove duplicates by iid
-9. Include all labels on issues/MRs, not just the provider labels
-10. For MRs, use "draft" field from glab output (not "is_draft")
-11. DO NOT wrap JSON in markdown code fences or add any explanatory text
-12. Extract assignees as array of usernames (from assignees[].username)
-13. Extract author as string (from author.username)
+8. For EACH failed pipeline, include a "jobs" array with job details from `glab ci view`
+9. If a pipeline is not failed, omit the "jobs" field (don't include empty array for successful pipelines)
+10. Job status values: "success", "failed", "canceled", "skipped", "manual", "running", "pending"
+11. When merging results from multiple provider queries, remove duplicates by iid
+12. Include all labels on issues/MRs, not just the provider labels
+13. For MRs, use "draft" field from glab output (not "is_draft")
+14. DO NOT wrap JSON in markdown code fences or add any explanatory text
+15. Extract assignees as array of usernames (from assignees[].username)
+16. Extract author as string (from author.username)
 
 PROVIDER FILTERING DETAILS:
 - For each provider in the PROVIDERS list, make separate glab calls with --label {provider}
