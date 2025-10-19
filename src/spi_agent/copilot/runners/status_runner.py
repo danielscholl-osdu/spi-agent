@@ -700,48 +700,129 @@ class StatusRunner(BaseRunner):
                         key=lambda s: stage_order.index(s) if s in stage_order else 999
                     )
 
-                    # Add rows to table
-                    for stage_idx, stage in enumerate(sorted_stages):
-                        stage_jobs = jobs_by_stage[stage]
-                        for job_idx, job in enumerate(stage_jobs):
-                            job_name = job.get("name", "Unknown")
-                            status = job.get("status", "unknown")
-                            duration = job.get("duration", 0)
+                    # Separate parent and downstream jobs
+                    parent_jobs = [j for j in jobs if not j.get("is_downstream", False)]
+                    downstream_jobs = [j for j in jobs if j.get("is_downstream", False)]
 
-                            # Format status with icons and colors
-                            if status == "success":
-                                status_display = "[green]✓ success[/green]"
-                            elif status == "failed":
-                                status_display = "[red]✗ failed[/red]"
-                            elif status == "canceled":
-                                status_display = "[yellow]⊘ canceled[/yellow]"
-                            elif status == "skipped":
-                                status_display = "[dim]⊘ skipped[/dim]"
-                            elif status in ["running", "pending"]:
-                                status_display = f"[yellow]▶ {status}[/yellow]"
-                            else:
-                                status_display = f"[dim]{status}[/dim]"
+                    # Display parent jobs first
+                    if parent_jobs:
+                        # Group parent jobs by stage
+                        parent_by_stage = {}
+                        for job in parent_jobs:
+                            stage = job.get("stage", "unknown")
+                            if stage not in parent_by_stage:
+                                parent_by_stage[stage] = []
+                            parent_by_stage[stage].append(job)
 
-                            # Format duration
-                            if duration:
-                                if duration < 60:
-                                    duration_str = f"{duration}s"
-                                elif duration < 3600:
-                                    duration_str = f"{duration // 60}m {duration % 60}s"
+                        sorted_parent_stages = sorted(
+                            parent_by_stage.keys(),
+                            key=lambda s: stage_order.index(s) if s in stage_order else 999
+                        )
+
+                        for stage_idx, stage in enumerate(sorted_parent_stages):
+                            stage_jobs = parent_by_stage[stage]
+                            for job_idx, job in enumerate(stage_jobs):
+                                job_name = job.get("name", "Unknown")
+                                status = job.get("status", "unknown")
+                                duration = job.get("duration", 0)
+
+                                # Format status
+                                if status == "success":
+                                    status_display = "[green]✓ success[/green]"
+                                elif status == "failed":
+                                    status_display = "[red]✗ failed[/red]"
+                                elif status == "canceled":
+                                    status_display = "[yellow]⊘ canceled[/yellow]"
+                                elif status == "skipped":
+                                    status_display = "[dim]⊘ skipped[/dim]"
+                                elif status in ["running", "pending"]:
+                                    status_display = f"[yellow]▶ {status}[/yellow]"
                                 else:
-                                    duration_str = f"{duration // 3600}h {(duration % 3600) // 60}m"
-                            else:
-                                duration_str = "-"
+                                    status_display = f"[dim]{status}[/dim]"
 
-                            # Only show stage name on first job in that stage
-                            stage_display = stage if job_idx == 0 else ""
+                                # Format duration
+                                if duration:
+                                    if duration < 60:
+                                        duration_str = f"{duration}s"
+                                    elif duration < 3600:
+                                        duration_str = f"{duration // 60}m {duration % 60}s"
+                                    else:
+                                        duration_str = f"{duration // 3600}h {(duration % 3600) // 60}m"
+                                else:
+                                    duration_str = "-"
 
-                            job_table.add_row(
-                                stage_display,
-                                job_name,
-                                status_display,
-                                duration_str
-                            )
+                                stage_display = stage if job_idx == 0 else ""
+
+                                job_table.add_row(
+                                    stage_display,
+                                    job_name,
+                                    status_display,
+                                    duration_str
+                                )
+
+                    # Add separator and downstream jobs if present
+                    if downstream_jobs:
+                        # Add a visual separator
+                        job_table.add_row(
+                            "[cyan]───[/cyan]",
+                            "[cyan]Downstream Pipeline Jobs ───────────────────[/cyan]",
+                            "[cyan]───[/cyan]",
+                            "[cyan]───[/cyan]"
+                        )
+
+                        # Group downstream jobs by stage
+                        downstream_by_stage = {}
+                        for job in downstream_jobs:
+                            stage = job.get("stage", "unknown")
+                            if stage not in downstream_by_stage:
+                                downstream_by_stage[stage] = []
+                            downstream_by_stage[stage].append(job)
+
+                        sorted_downstream_stages = sorted(
+                            downstream_by_stage.keys(),
+                            key=lambda s: stage_order.index(s) if s in stage_order else 999
+                        )
+
+                        for stage_idx, stage in enumerate(sorted_downstream_stages):
+                            stage_jobs = downstream_by_stage[stage]
+                            for job_idx, job in enumerate(stage_jobs):
+                                job_name = "  " + job.get("name", "Unknown")  # Indent downstream jobs
+                                status = job.get("status", "unknown")
+                                duration = job.get("duration", 0)
+
+                                # Format status
+                                if status == "success":
+                                    status_display = "[green]✓ success[/green]"
+                                elif status == "failed":
+                                    status_display = "[red]✗ failed[/red]"
+                                elif status == "canceled":
+                                    status_display = "[yellow]⊘ canceled[/yellow]"
+                                elif status == "skipped":
+                                    status_display = "[dim]⊘ skipped[/dim]"
+                                elif status in ["running", "pending"]:
+                                    status_display = f"[yellow]▶ {status}[/yellow]"
+                                else:
+                                    status_display = f"[dim]{status}[/dim]"
+
+                                # Format duration
+                                if duration:
+                                    if duration < 60:
+                                        duration_str = f"{duration}s"
+                                    elif duration < 3600:
+                                        duration_str = f"{duration // 60}m {duration % 60}s"
+                                    else:
+                                        duration_str = f"{duration // 3600}h {(duration % 3600) // 60}m"
+                                else:
+                                    duration_str = "-"
+
+                                stage_display = stage if job_idx == 0 else ""
+
+                                job_table.add_row(
+                                    stage_display,
+                                    job_name,
+                                    status_display,
+                                    duration_str
+                                )
 
                     console.print(job_table)
                     console.print()
@@ -1051,7 +1132,7 @@ class StatusRunner(BaseRunner):
 
         # Timeout configuration
         start_time = time.time()
-        max_timeout = 300  # 5 minutes hard timeout
+        max_timeout = 600  # 10 minutes hard timeout (increased for downstream pipeline jobs)
         last_output_time = time.time()
         output_timeout = 30  # Seconds of silence before logging a warning
         line_count = 0

@@ -123,7 +123,30 @@ For each service, execute the following commands:
     - duration: Job duration in seconds (may be null)
     - web_url: Job URL
 
-    NOTE: Only fetch jobs for failed pipelines to minimize API calls
+6. GET_DOWNSTREAM_PIPELINE_JOBS:
+    For EACH failed pipeline that has trigger jobs (jobs with names starting with "trigger-"):
+
+    a) Query for downstream pipelines matching the same SHA:
+       $ glab api "projects/{PROJECT_PATH_ENCODED}/pipelines?source=pipeline&sha={PIPELINE_SHA}&per_page=5" --hostname {GITLAB_HOST} 2>/dev/null || echo "[]"
+
+       Where {PIPELINE_SHA} is the full commit SHA of the parent pipeline
+       Example: If parent pipeline has sha="0f6affd748090d2d9a72326ad1073756ddef13f0", query: "source=pipeline&sha=0f6affd748090d2d9a72326ad1073756ddef13f0&per_page=5"
+
+    b) For the FIRST downstream pipeline found (take first from array), fetch its jobs:
+       $ glab api projects/{PROJECT_PATH_ENCODED}/pipelines/{DOWNSTREAM_PIPELINE_ID}/jobs --hostname {GITLAB_HOST} --paginate 2>/dev/null || echo "[]"
+
+    c) Add downstream jobs to the parent pipeline's "jobs" array with markers:
+       - Add field "is_downstream": true to each downstream job
+       - Add field "downstream_pipeline_id": {PIPELINE_ID} to track which downstream pipeline it came from
+
+    IMPORTANT:
+    - Match downstream pipelines by FULL SHA (not shortened) + source="pipeline"
+    - This is reliable because downstream pipelines share the same commit SHA
+    - Only fetch jobs for ONE downstream pipeline to avoid timeouts
+    - Downstream jobs are added to the SAME "jobs" array as parent jobs
+    - Use "is_downstream": true to mark downstream jobs for display
+
+    NOTE: SHA-based matching ensures we get the correct downstream pipeline triggered by the parent
 
 </GATHERING_TASKS>
 
@@ -197,27 +220,41 @@ IMPORTANT:
                 "jobs": [
                   {
                     "id": 98765,
-                    "name": "compile-and-unit-test",
-                    "stage": "build",
-                    "status": "success",
-                    "duration": 45,
+                    "name": "trigger-trusted-tests",
+                    "stage": "review",
+                    "status": "failed",
+                    "duration": 2287,
                     "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98765"
                   },
                   {
                     "id": 98766,
+                    "name": "compile-and-unit-test",
+                    "stage": "build",
+                    "status": "success",
+                    "duration": 45,
+                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98766",
+                    "is_downstream": true,
+                    "downstream_pipeline_id": 12341
+                  },
+                  {
+                    "id": 98767,
                     "name": "azure-containerize",
                     "stage": "containerize",
                     "status": "failed",
                     "duration": 15,
-                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98766"
+                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98767",
+                    "is_downstream": true,
+                    "downstream_pipeline_id": 12341
                   },
                   {
-                    "id": 98767,
+                    "id": 98768,
                     "name": "ibm-deploy",
                     "stage": "deploy",
                     "status": "canceled",
                     "duration": 0,
-                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98767"
+                    "web_url": "https://gitlab.com/osdu/platform/os-partition/-/jobs/98768",
+                    "is_downstream": true,
+                    "downstream_pipeline_id": 12341
                   }
                 ]
               },
@@ -246,15 +283,17 @@ IMPORTANT RULES:
 5. If an MR has no pipelines, set "pipelines": [] (empty array)
 6. Include up to 5 most recent pipelines per MR
 7. Pipeline status values: "success", "failed", "running", "pending", "canceled", "skipped", "manual"
-8. For EACH failed pipeline, include a "jobs" array with job details from `glab ci view`
-9. If a pipeline is not failed, omit the "jobs" field (don't include empty array for successful pipelines)
-10. Job status values: "success", "failed", "canceled", "skipped", "manual", "running", "pending"
-11. When merging results from multiple provider queries, remove duplicates by iid
-12. Include all labels on issues/MRs, not just the provider labels
-13. For MRs, use "draft" field from glab output (not "is_draft")
-14. DO NOT wrap JSON in markdown code fences or add any explanatory text
-15. Extract assignees as array of usernames (from assignees[].username)
-16. Extract author as string (from author.username)
+8. For EACH failed pipeline, include a "jobs" array with job details from `glab api`
+9. For jobs from downstream pipelines (triggered by "trigger-*" jobs), add "is_downstream": true field
+10. Downstream pipeline jobs are included in the SAME "jobs" array as parent pipeline jobs
+11. If a pipeline is not failed, omit the "jobs" field (don't include empty array for successful pipelines)
+12. Job status values: "success", "failed", "canceled", "skipped", "manual", "running", "pending"
+13. When merging results from multiple provider queries, remove duplicates by iid
+14. Include all labels on issues/MRs, not just the provider labels
+15. For MRs, use "draft" field from glab output (not "is_draft")
+16. DO NOT wrap JSON in markdown code fences or add any explanatory text
+17. Extract assignees as array of usernames (from assignees[].username)
+18. Extract author as string (from author.username)
 
 PROVIDER FILTERING DETAILS:
 - For each provider in the PROVIDERS list, make separate glab calls with --label {provider}
