@@ -129,16 +129,25 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "status-glab":
         if len(parts) < 2:
-            return "Usage: /status-glab <projects> [--provider <providers>]\nExample: /status-glab partition --provider azure"
+            return "Usage: /status-glab <projects> [--provider <providers>] [--mode <direct|ai>]\nExample: /status-glab partition --provider azure\nExample: /status-glab partition --mode ai"
 
         projects_arg = parts[1]
         providers = "Azure,Core"  # Default providers (capitalized to match GitLab labels)
+        mode = "direct"  # Default to fast direct mode
 
         # Parse --provider flag
         if "--provider" in parts:
             provider_idx = parts.index("--provider")
             if provider_idx + 1 < len(parts):
                 providers = parts[provider_idx + 1]
+
+        # Parse --mode flag
+        if "--mode" in parts:
+            mode_idx = parts.index("--mode")
+            if mode_idx + 1 < len(parts):
+                mode = parts[mode_idx + 1]
+                if mode not in ["direct", "ai"]:
+                    return f"Error: Invalid mode '{mode}'. Use 'direct' or 'ai'"
 
         try:
             prompt_file = copilot_module.get_prompt_file("status-glab.md")
@@ -150,12 +159,17 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if invalid:
             return f"Error: Invalid project(s): {', '.join(invalid)}"
 
-        console.print(f"\n[yellow]Checking GitLab status for: {', '.join(projects)} (providers: {providers})[/yellow]\n")
+        mode_label = "Direct API" if mode == "direct" else "AI Prompt"
+        console.print(f"\n[yellow]Checking GitLab status for: {', '.join(projects)} (providers: {providers}, mode: {mode_label})[/yellow]\n")
 
         # Run status-glab using StatusRunner with providers
         providers_list = [p.strip() for p in providers.split(",")]
         runner = copilot_module.StatusRunner(prompt_file, projects, providers_list)
-        runner.run()
+
+        if mode == "direct":
+            await runner.run_direct()
+        else:
+            runner.run()
 
         # Brief acknowledgment - results were already displayed
         await agent.agent.run(
@@ -523,6 +537,12 @@ Examples:
             default="Azure,Core",
             help="Provider label(s) for filtering (default: Azure,Core)",
         )
+        status_glab_parser.add_argument(
+            "--mode",
+            choices=["direct", "ai"],
+            default="direct",
+            help="Execution mode: 'direct' (fast Python API) or 'ai' (Copilot prompt) (default: direct)",
+        )
 
         test_parser = subparsers.add_parser(
             "test",
@@ -661,7 +681,14 @@ async def async_main(args: Optional[list[str]] = None) -> int:
 
         # Use StatusRunner with providers for GitLab status
         runner = copilot_module.StatusRunner(prompt_file, projects, providers)
-        return runner.run()
+
+        # Choose execution mode
+        if parsed.mode == "direct":
+            # Direct Python API mode (fast, no AI)
+            return await runner.run_direct()
+        else:
+            # AI prompt mode (original behavior)
+            return runner.run()
 
     if parsed.command == "test":
         if not COPILOT_AVAILABLE:

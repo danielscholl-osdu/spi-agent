@@ -742,12 +742,13 @@ class StatusRunner(BaseRunner):
 
                                 # Format duration
                                 if duration:
-                                    if duration < 60:
-                                        duration_str = f"{duration}s"
-                                    elif duration < 3600:
-                                        duration_str = f"{duration // 60}m {duration % 60}s"
+                                    duration_int = int(duration)  # Convert float to int
+                                    if duration_int < 60:
+                                        duration_str = f"{duration_int}s"
+                                    elif duration_int < 3600:
+                                        duration_str = f"{duration_int // 60}m {duration_int % 60}s"
                                     else:
-                                        duration_str = f"{duration // 3600}h {(duration % 3600) // 60}m"
+                                        duration_str = f"{duration_int // 3600}h {(duration_int % 3600) // 60}m"
                                 else:
                                     duration_str = "-"
 
@@ -806,12 +807,13 @@ class StatusRunner(BaseRunner):
 
                                 # Format duration
                                 if duration:
-                                    if duration < 60:
-                                        duration_str = f"{duration}s"
-                                    elif duration < 3600:
-                                        duration_str = f"{duration // 60}m {duration % 60}s"
+                                    duration_int = int(duration)  # Convert float to int
+                                    if duration_int < 60:
+                                        duration_str = f"{duration_int}s"
+                                    elif duration_int < 3600:
+                                        duration_str = f"{duration_int // 60}m {duration_int % 60}s"
                                     else:
-                                        duration_str = f"{duration // 3600}h {(duration % 3600) // 60}m"
+                                        duration_str = f"{duration_int // 3600}h {(duration_int % 3600) // 60}m"
                                 else:
                                     duration_str = "-"
 
@@ -949,6 +951,87 @@ class StatusRunner(BaseRunner):
 
         console.print(Panel(config, title=title, border_style="blue"))
         console.print()
+
+    async def run_direct(self) -> int:
+        """Execute direct Python API calls for fast status gathering (no AI)."""
+        import asyncio
+        from spi_agent.config import AgentConfig
+        from spi_agent.gitlab.direct_client import GitLabDirectClient
+
+        self.show_config()
+        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
+
+        # Create direct client with AgentConfig (has GitLab settings)
+        agent_config = AgentConfig()
+        direct_client = GitLabDirectClient(agent_config)
+
+        # Create progress display
+        layout = self.create_layout()
+        layout["status"].update(self.tracker.get_table())
+
+        # Open log file
+        try:
+            self.log_handle = open(self.log_file, "w", buffering=1)
+            self.log_handle.write(f"{'='*70}\n")
+            self.log_handle.write("GitLab Status Check (Direct API Mode)\n")
+            self.log_handle.write(f"{'='*70}\n")
+            self.log_handle.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            self.log_handle.write(f"Services: {', '.join(self.services)}\n")
+            self.log_handle.write(f"Providers: {', '.join(self.providers or [])}\n")
+            self.log_handle.write(f"{'='*70}\n\n")
+            self.log_handle.flush()
+        except Exception as e:
+            logger.error(f"Failed to open log file: {e}")
+            self.log_handle = None
+
+        try:
+            with Live(layout, console=console, refresh_per_second=4, transient=False) as live:
+                # Update tracker as we fetch data
+                for service in self.services:
+                    self.tracker.update(service, "querying", "Fetching status")
+                    live.update(layout)
+
+                # Fetch all status data in parallel
+                status_data = await direct_client.get_all_status(
+                    self.services,
+                    self.providers or ["Azure", "Core"]
+                )
+
+                # Mark services as gathered
+                for service in self.services:
+                    if service in status_data.get("projects", {}):
+                        if "error" not in status_data["projects"][service]:
+                            self.tracker.update(service, "gathered", "Data collected")
+                        else:
+                            self.tracker.update(service, "error", "Failed to gather data")
+                    live.update(layout)
+
+            console.print()  # Add spacing after Live context exits
+
+            # Display the results using existing display method
+            self.display_status(status_data)
+
+            # Save log
+            if self.log_handle:
+                import json
+                self.log_handle.write("\n=== STATUS DATA ===\n")
+                self.log_handle.write(json.dumps(status_data, indent=2))
+                self.log_handle.write(f"\n\n{'='*70}\n")
+                self.log_handle.write(f"Status retrieved at: {status_data.get('timestamp')}\n")
+                self.log_handle.write(f"Log saved to: {self.log_file}\n")
+                self.log_handle.close()
+
+            console.print(f"\n[green]✓[/green] Log saved to: {self.log_file}")
+
+            return 0
+
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}", style="bold red")
+            logger.error(f"Direct mode error: {e}", exc_info=True)
+            if self.log_handle:
+                self.log_handle.write(f"\nERROR: {e}\n")
+                self.log_handle.close()
+            return 1
 
     def run(self) -> int:
         """Execute copilot to gather status with live output and process monitoring"""
