@@ -954,7 +954,7 @@ class StatusRunner(BaseRunner):
         console.print()
 
     async def run_direct(self) -> int:
-        """Execute direct Python API calls for fast status gathering (no AI)."""
+        """Execute direct Python API calls for fast status gathering."""
         import asyncio
         from spi_agent.config import AgentConfig
         from spi_agent.gitlab.direct_client import GitLabDirectClient
@@ -966,15 +966,11 @@ class StatusRunner(BaseRunner):
         agent_config = AgentConfig()
         direct_client = GitLabDirectClient(agent_config)
 
-        # Create progress display
-        layout = self.create_layout()
-        layout["status"].update(self.tracker.get_table())
-
         # Open log file
         try:
             self.log_handle = open(self.log_file, "w", buffering=1)
             self.log_handle.write(f"{'='*70}\n")
-            self.log_handle.write("GitLab Status Check (Direct API Mode)\n")
+            self.log_handle.write("GitLab Status Check (Direct API)\n")
             self.log_handle.write(f"{'='*70}\n")
             self.log_handle.write(f"Timestamp: {datetime.now().isoformat()}\n")
             self.log_handle.write(f"Services: {', '.join(self.services)}\n")
@@ -986,28 +982,14 @@ class StatusRunner(BaseRunner):
             self.log_handle = None
 
         try:
-            with Live(layout, console=console, refresh_per_second=4, transient=False) as live:
-                # Update tracker as we fetch data
-                for service in self.services:
-                    self.tracker.update(service, "querying", "Fetching status")
-                    live.update(layout)
-
-                # Fetch all status data in parallel
+            # Fetch all status data in parallel (fast!)
+            with console.status("[bold blue]Fetching GitLab data...[/bold blue]", spinner="dots"):
                 status_data = await direct_client.get_all_status(
                     self.services,
                     self.providers or ["Azure", "Core"]
                 )
 
-                # Mark services as gathered
-                for service in self.services:
-                    if service in status_data.get("projects", {}):
-                        if "error" not in status_data["projects"][service]:
-                            self.tracker.update(service, "gathered", "Data collected")
-                        else:
-                            self.tracker.update(service, "error", "Failed to gather data")
-                    live.update(layout)
-
-            console.print()  # Add spacing after Live context exits
+            console.print()
 
             # Display the results using existing display method
             self.display_status(status_data)
