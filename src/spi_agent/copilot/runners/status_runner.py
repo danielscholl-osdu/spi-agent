@@ -923,7 +923,8 @@ class StatusRunner(BaseRunner):
             elif not approval_needed:
                 next_steps.append("[green]✓[/green] All workflows completed")
 
-        if next_steps:
+        # Only show Next Steps for GitHub (not useful for GitLab - jobs table is clearer)
+        if next_steps and not is_gitlab:
             console.print(Panel(
                 "\n".join(next_steps),
                 title="💡 Next Steps",
