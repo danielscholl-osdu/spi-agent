@@ -20,10 +20,13 @@ class GitLabToolsBase:
         """
         self.config = config
 
+        # All OSDU services use community.opengroup.org
+        gitlab_url = "https://community.opengroup.org"
+
         # Initialize GitLab client
-        if config.gitlab_token and config.gitlab_url:
+        if config.gitlab_token:
             self.gitlab = gitlab.Gitlab(
-                url=config.gitlab_url,
+                url=gitlab_url,
                 private_token=config.gitlab_token,
             )
             # Authenticate to verify token
@@ -35,10 +38,7 @@ class GitLabToolsBase:
                 logging.warning(f"GitLab authentication warning: {e}")
         else:
             # Create unauthenticated client for public projects
-            if config.gitlab_url:
-                self.gitlab = gitlab.Gitlab(url=config.gitlab_url)
-            else:
-                self.gitlab = gitlab.Gitlab()
+            self.gitlab = gitlab.Gitlab(url=gitlab_url)
 
     def _format_issue(self, issue: Any) -> Dict[str, Any]:
         """Format GitLab issue object to dict."""

@@ -44,13 +44,14 @@ class SPIAgent:
         self.github_tools = create_github_tools(self.config)
         self.mcp_tools = mcp_tools or []
 
-        # Create GitLab tools if configured
-        if self.config.gitlab_url and self.config.gitlab_token:
+        # Create GitLab tools if token configured
+        # (URL is hardcoded to community.opengroup.org for all OSDU services)
+        if self.config.gitlab_token:
             self.gitlab_tools = create_gitlab_tools(self.config)
             logger.info(f"GitLab tools initialized: {len(self.gitlab_tools)} tools available")
         else:
             self.gitlab_tools = []
-            logger.info("GitLab not configured - skipping GitLab tools")
+            logger.info("GitLab token not configured - skipping GitLab tools")
 
         # Load agent instructions from system prompt
         self.instructions = self._load_system_prompt()

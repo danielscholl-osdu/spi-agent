@@ -136,8 +136,8 @@ class AgentConfig:
         """
         Get full GitLab project path (group/project).
 
-        If gitlab_default_group is set, uses it as the group prefix.
-        Otherwise, returns the project name as-is (assuming full path provided).
+        For OSDU services, fetches the upstream GitLab URL from GitHub and parses the path.
+        Otherwise, uses gitlab_default_group or assumes full path provided.
 
         Args:
             project: Project name or full path
@@ -146,8 +146,34 @@ class AgentConfig:
             Full project path for GitLab API
         """
         if "/" in project:
-            # Already a full path (e.g., "osdu/partition")
+            # Already a full path (e.g., "osdu/platform/system/partition")
             return project
+
+        # Try to fetch upstream URL from GitHub for OSDU services
+        try:
+            import subprocess
+            from urllib.parse import urlparse
+
+            repo = f"{self.organization}/{project}"
+            result = subprocess.run(
+                ["gh", "api", f"repos/{repo}/actions/variables/UPSTREAM_REPO_URL", "--jq", ".value"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                upstream_url = result.stdout.strip()
+                # Parse project path from URL
+                # E.g., "https://community.opengroup.org/osdu/platform/system/partition.git"
+                # -> "osdu/platform/system/partition"
+                parsed = urlparse(upstream_url)
+                path = parsed.path.lstrip('/').rstrip('.git')
+                if path:
+                    return path
+
+        except Exception:
+            pass  # Fall through to default logic
 
         if self.gitlab_default_group:
             # Use default group (e.g., "osdu/partition")
