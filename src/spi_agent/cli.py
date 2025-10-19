@@ -127,6 +127,45 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         )
         return None
 
+    if cmd == "status-glab":
+        if len(parts) < 2:
+            return "Usage: /status-glab <projects> [--provider <providers>]\nExample: /status-glab partition --provider azure"
+
+        projects_arg = parts[1]
+        providers = "Azure,Core"  # Default providers (capitalized to match GitLab labels)
+
+        # Parse --provider flag
+        if "--provider" in parts:
+            provider_idx = parts.index("--provider")
+            if provider_idx + 1 < len(parts):
+                providers = parts[provider_idx + 1]
+
+        try:
+            prompt_file = copilot_module.get_prompt_file("status-glab.md")
+        except FileNotFoundError as exc:  # pragma: no cover - packaging guard
+            return f"Error: {exc}"
+
+        projects = copilot_module.parse_services(projects_arg)
+        invalid = [p for p in projects if p not in copilot_module.SERVICES]
+        if invalid:
+            return f"Error: Invalid project(s): {', '.join(invalid)}"
+
+        console.print(f"\n[yellow]Checking GitLab status for: {', '.join(projects)} (providers: {providers})[/yellow]\n")
+
+        # Run status-glab using StatusRunner with providers
+        providers_list = [p.strip() for p in providers.split(",")]
+        runner = copilot_module.StatusRunner(prompt_file, projects, providers_list)
+        runner.run()
+
+        # Brief acknowledgment - results were already displayed
+        await agent.agent.run(
+            f"The GitLab status check just completed for {', '.join(projects)}. "
+            f"The results were displayed above. "
+            f"Acknowledge briefly and offer to help analyze the status or address any issues.",
+            thread=thread,
+        )
+        return None
+
     if cmd == "test":
         if len(parts) < 2:
             return "Usage: /test <services> [--provider <provider>]\nExample: /test partition --provider azure"
@@ -234,7 +273,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
         return None
 
-    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /triage, /help"
+    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /status-glab, /test, /triage, /help"
 
 
 def _render_help() -> None:
@@ -263,6 +302,8 @@ def _render_help() -> None:
 - `/fork partition --branch develop` - Fork with custom branch
 - `/status partition` - Check GitHub status for partition
 - `/status partition,legal` - Check status for multiple repos
+- `/status-glab partition` - Check GitLab status for partition (default providers: azure,core)
+- `/status-glab partition --provider azure` - Check GitLab status with specific provider
 - `/test partition` - Run Maven tests (default: core,core-plus,azure profiles)
 - `/test partition --provider aws` - Run tests with specific provider
 - `/triage partition` - Run dependency/vulnerability triage
@@ -299,7 +340,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
             console.print()
             console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
             console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-            console.print("[dim]Slash commands: /fork, /status, /test, /triage[/dim]\n")
+            console.print("[dim]Slash commands: /fork, /status, /status-glab, /test, /triage[/dim]\n")
 
         thread = agent.agent.get_new_thread()
 
@@ -416,6 +457,7 @@ Commands:
   -p PROMPT           Single query mode
   fork                Fork and initialize repositories (requires copilot)
   status              Check GitHub status (requires copilot)
+  status-glab         Check GitLab status with provider filtering (requires copilot)
   test                Run Maven tests for services (requires copilot)
   triage              Run dependency/vulnerability triage (requires copilot)
 
@@ -423,7 +465,9 @@ Examples:
   spi-agent                                    # Interactive chat
   spi-agent -p "List issues in partition"      # One-shot query
   spi-agent fork --services partition          # Fork repos
-  spi-agent status --services partition,legal  # Check status
+  spi-agent status --services partition,legal  # Check GitHub status
+  spi-agent status-glab --projects partition   # Check GitLab status
+  spi-agent status-glab --projects partition --provider azure  # GitLab status (azure only)
   spi-agent test --services partition          # Run Maven tests
   spi-agent triage --services partition        # Run triage analysis
   spi-agent triage --services partition --create-issue  # Triage + create issues
@@ -461,6 +505,23 @@ Examples:
             "-s",
             required=True,
             help="Service name(s): 'all', single name, or comma-separated list",
+        )
+
+        status_glab_parser = subparsers.add_parser(
+            "status-glab",
+            help="Get GitLab status for OSDU SPI service repositories",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        status_glab_parser.add_argument(
+            "--projects",
+            "-p",
+            required=True,
+            help="Project name(s): 'all', single name, or comma-separated list",
+        )
+        status_glab_parser.add_argument(
+            "--provider",
+            default="Azure,Core",
+            help="Provider label(s) for filtering (default: Azure,Core)",
         )
 
         test_parser = subparsers.add_parser(
@@ -575,6 +636,31 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             return 1
 
         runner = copilot_module.StatusRunner(prompt_file, services)
+        return runner.run()
+
+    if parsed.command == "status-glab":
+        if not COPILOT_AVAILABLE:
+            console.print("[red]Error:[/red] Copilot module not available", style="bold red")
+            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
+            return 1
+
+        try:
+            prompt_file = copilot_module.get_prompt_file("status-glab.md")
+        except FileNotFoundError as exc:
+            console.print(f"[red]Error:[/red] {exc}", style="bold red")
+            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
+            return 1
+
+        projects = copilot_module.parse_services(parsed.projects)
+        invalid = [p for p in projects if p not in copilot_module.SERVICES]
+        if invalid:
+            console.print(f"[red]Error:[/red] Invalid project(s): {', '.join(invalid)}", style="bold red")
+            return 1
+
+        providers = [p.strip() for p in parsed.provider.split(",")]
+
+        # Use StatusRunner with providers for GitLab status
+        runner = copilot_module.StatusRunner(prompt_file, projects, providers)
         return runner.run()
 
     if parsed.command == "test":

@@ -317,6 +317,7 @@ class TestRunner(BaseRunner):
         try:
             process = subprocess.Popen(
                 command,
+                stdin=subprocess.DEVNULL,  # Prevent copilot from waiting for user input
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

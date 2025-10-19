@@ -12,6 +12,7 @@ from spi_agent.config import AgentConfig
 from spi_agent.filesystem import create_hybrid_filesystem_tools
 from spi_agent.git import create_git_tools
 from spi_agent.github import create_github_tools
+from spi_agent.gitlab import create_gitlab_tools
 from spi_agent.hosted_tools import HostedToolsManager
 from spi_agent.middleware import (
     logging_chat_middleware,
@@ -24,10 +25,11 @@ logger = logging.getLogger(__name__)
 
 class SPIAgent:
     """
-    AI-powered GitHub Issues management agent for OSDU SPI services.
+    AI-powered repository management agent for OSDU SPI services.
 
-    This agent uses Microsoft Agent Framework with Azure OpenAI and PyGithub
-    to provide natural language interface for GitHub issue management.
+    This agent uses Microsoft Agent Framework with Azure OpenAI to provide
+    a natural language interface for GitHub and GitLab repository management,
+    including issues, pull/merge requests, workflows/pipelines, and more.
     """
 
     def __init__(self, config: Optional[AgentConfig] = None, mcp_tools: Optional[list] = None):
@@ -41,6 +43,14 @@ class SPIAgent:
         self.config = config or AgentConfig()
         self.github_tools = create_github_tools(self.config)
         self.mcp_tools = mcp_tools or []
+
+        # Create GitLab tools if configured
+        if self.config.gitlab_url and self.config.gitlab_token:
+            self.gitlab_tools = create_gitlab_tools(self.config)
+            logger.info(f"GitLab tools initialized: {len(self.gitlab_tools)} tools available")
+        else:
+            self.gitlab_tools = []
+            logger.info("GitLab not configured - skipping GitLab tools")
 
         # Load agent instructions from system prompt
         self.instructions = self._load_system_prompt()
@@ -118,8 +128,8 @@ class SPIAgent:
         # Create git repository management tools
         self.git_tools = create_git_tools(self.config)
 
-        # Combine GitHub tools, file system tools, git tools, and MCP tools
-        all_tools = self.github_tools + self.filesystem_tools + self.git_tools + self.mcp_tools
+        # Combine GitHub tools, file system tools, git tools, GitLab tools, and MCP tools
+        all_tools = self.github_tools + self.filesystem_tools + self.git_tools + self.gitlab_tools + self.mcp_tools
 
         # Create agent with all available tools and middleware
         # Note: Thread-based memory is built-in - agent remembers within a session

@@ -120,6 +120,10 @@ Examples:
   %(prog)s status --services partition
   %(prog)s status --services partition,legal,entitlements
   %(prog)s status --services all
+
+  %(prog)s status-glab --projects partition
+  %(prog)s status-glab --projects partition,legal --provider azure
+  %(prog)s status-glab --projects all --provider azure,core
         """,
     )
 
@@ -185,6 +189,44 @@ Information gathered:
         required=True,
         metavar="SERVICES",
         help="Service name(s): 'all', single name, or comma-separated list",
+    )
+
+    # Status GitLab command
+    status_glab_parser = subparsers.add_parser(
+        "status-glab",
+        help="Get GitLab status for OSDU SPI service repositories",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --projects partition
+  %(prog)s --projects partition,legal,entitlements
+  %(prog)s --projects all
+  %(prog)s --projects partition --provider azure
+  %(prog)s --projects all --provider azure,core
+
+Available projects:
+  partition, entitlements, legal, schema, file, storage,
+  indexer, indexer-queue, search, workflow
+
+Information gathered:
+  - Open issues filtered by provider labels
+  - Merge requests filtered by provider labels
+  - Recent pipeline runs (success, failed, running)
+  - Provider labels highlighted in output
+        """,
+    )
+    status_glab_parser.add_argument(
+        "--projects",
+        "-p",
+        required=True,
+        metavar="PROJECTS",
+        help="Project name(s): 'all', single name, or comma-separated list",
+    )
+    status_glab_parser.add_argument(
+        "--provider",
+        default="Azure,Core",
+        metavar="PROVIDERS",
+        help="Provider label(s) for filtering (default: Azure,Core)",
     )
 
     # Custom error handling for better UX
@@ -257,6 +299,37 @@ Information gathered:
 
         # Run status check
         runner = StatusRunner(prompt_file, services)
+        return runner.run()
+
+    # Handle status-glab command
+    if args.command == "status-glab":
+        try:
+            prompt_file = get_prompt_file("status-glab.md")
+        except FileNotFoundError as exc:
+            console.print(
+                f"[red]Error:[/red] {exc}",
+                style="bold red",
+            )
+            return 1
+
+        # Parse projects
+        projects = parse_services(args.projects)
+
+        # Validate projects
+        invalid = [p for p in projects if p not in SERVICES]
+        if invalid:
+            console.print(
+                f"[red]Error:[/red] Invalid project(s): {', '.join(invalid)}",
+                style="bold red",
+            )
+            console.print(f"\n[cyan]Available projects:[/cyan] {', '.join(SERVICES.keys())}")
+            return 1
+
+        # Parse providers
+        providers = [p.strip() for p in args.provider.split(",")]
+
+        # Run GitLab status check using StatusRunner with providers
+        runner = StatusRunner(prompt_file, projects, providers)
         return runner.run()
 
     return 0

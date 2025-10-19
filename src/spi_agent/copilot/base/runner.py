@@ -222,6 +222,7 @@ class BaseRunner(ABC):
             # Start process with streaming output
             process = subprocess.Popen(
                 command,
+                stdin=subprocess.DEVNULL,  # Prevent copilot from waiting for user input
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
                 text=True,

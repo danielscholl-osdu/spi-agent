@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 class StatusRunner(BaseRunner):
-    """Runs Copilot CLI to gather GitHub status and displays results"""
+    """Runs Copilot CLI to gather GitHub/GitLab status and displays results"""
 
-    def __init__(self, prompt_file: Union[Path, Traversable], services: List[str]):
+    def __init__(self, prompt_file: Union[Path, Traversable], services: List[str], providers: Optional[List[str]] = None):
+        self.providers = providers  # Optional providers for GitLab filtering (must be set before super().__init__)
         super().__init__(prompt_file, services)
         self.raw_output = []  # Keep full output for JSON extraction
         self.tracker = StatusTracker(services)
@@ -40,6 +41,9 @@ class StatusRunner(BaseRunner):
     @property
     def log_prefix(self) -> str:
         """Return log file prefix for this runner type."""
+        # Use status-glab prefix if providers specified (GitLab mode)
+        if self.providers:
+            return "status-glab"
         return "status"
 
     def load_prompt(self) -> str:
@@ -52,6 +56,12 @@ class StatusRunner(BaseRunner):
         # Inject services argument
         services_arg = ",".join(self.services)
         augmented = f"{prompt}\n\nARGUMENTS:\nSERVICES: {services_arg}"
+
+        # Inject providers argument if specified (for GitLab status)
+        if self.providers:
+            providers_arg = ",".join(self.providers)
+            augmented += f"\nPROVIDERS: {providers_arg}"
+
         return augmented
 
     def parse_output(self, line: str) -> None:
@@ -217,35 +227,65 @@ class StatusRunner(BaseRunner):
         return None
 
     def display_status(self, data: Dict):
-        """Display GitHub status in beautiful Rich format"""
+        """Display GitHub/GitLab status in beautiful Rich format"""
 
         if not data:
             console.print("[red]Error:[/red] No status data received", style="bold red")
             return
 
         # Handle different possible structures
+        # GitLab uses "projects", GitHub uses "services"
         if "services" in data:
             services_data = data["services"]
             timestamp = data.get("timestamp", datetime.now().isoformat())
+            is_gitlab = False
+        elif "projects" in data:
+            services_data = data["projects"]
+            timestamp = data.get("timestamp", datetime.now().isoformat())
+            is_gitlab = True
         elif all(key in SERVICES for key in data.keys() if key != "timestamp"):
             # Data is structured as {service_name: {...}, service_name: {...}}
             services_data = {k: v for k, v in data.items() if k != "timestamp"}
             timestamp = data.get("timestamp", datetime.now().isoformat())
+            is_gitlab = False
         else:
             console.print(f"[red]Error:[/red] Unexpected data structure. Keys found: {list(data.keys())}", style="bold red")
             console.print(f"[dim]Data preview: {str(data)[:500]}...[/dim]")
             return
 
+        # For GitLab: Collect pipelines from each MR (new structure)
+        # Pipelines are now stored per-MR instead of globally
+        mr_pipelines = {}  # service_name -> list of (mr_iid, pipeline) tuples
+        if is_gitlab:
+            for service_name, service_data in services_data.items():
+                pipelines_list = []
+                prs = service_data.get("merge_requests", {}).get("items", [])
+                for pr in prs:
+                    mr_iid = pr.get("iid")
+                    mr_pipelines_data = pr.get("pipelines", [])
+                    for pipeline in mr_pipelines_data:
+                        pipelines_list.append((mr_iid, pipeline))
+                mr_pipelines[service_name] = pipelines_list
+
         # Summary Table
-        summary_table = Table(title="📊 GitHub Status Summary", expand=True)
+        table_title = "📊 GitLab Status Summary" if is_gitlab else "📊 GitHub Status Summary"
+        summary_table = Table(title=table_title, expand=True)
         summary_table.add_column("Service", style="cyan", no_wrap=True)
         summary_table.add_column("Issues", style="yellow")
-        summary_table.add_column("PRs", style="magenta")
-        summary_table.add_column("Workflows", style="blue")
+
+        if is_gitlab:
+            summary_table.add_column("MRs", style="magenta")
+            summary_table.add_column("Pipelines", style="blue")
+        else:
+            summary_table.add_column("PRs", style="magenta")
+            summary_table.add_column("Workflows", style="blue")
+
         summary_table.add_column("Last Update", style="dim")
 
         for service_name, service_data in services_data.items():
-            if not service_data.get("repo", {}).get("exists", False):
+            # Handle both GitHub (repo) and GitLab (project) keys
+            repo_or_project = service_data.get("project" if is_gitlab else "repo", {})
+            if not repo_or_project.get("exists", False):
                 summary_table.add_row(
                     f"✗ {service_name}",
                     "[dim]N/A[/dim]",
@@ -256,33 +296,60 @@ class StatusRunner(BaseRunner):
                 continue
 
             issues_count = service_data.get("issues", {}).get("count", 0)
-            prs_count = service_data.get("pull_requests", {}).get("count", 0)
+            prs_count = service_data.get("merge_requests" if is_gitlab else "pull_requests", {}).get("count", 0)
 
-            # Workflow status - check recent runs
-            workflows = service_data.get("workflows", {}).get("recent", [])
+            # Workflow/Pipeline status - check recent runs
+            if is_gitlab:
+                # For GitLab: Use pipelines from MRs (already collected)
+                workflows = [p for _, p in mr_pipelines.get(service_name, [])]
+            else:
+                # For GitHub: Use global workflows list
+                workflows = service_data.get("workflows", {}).get("recent", [])
+
             if workflows:
-                # Count workflow statuses
-                # Note: action_required is a CONCLUSION, not a status
-                needs_approval = sum(1 for w in workflows if w.get("conclusion") == "action_required")
-                running = sum(1 for w in workflows if w.get("status") in ["in_progress", "queued", "waiting"])
-                completed = sum(1 for w in workflows if w.get("status") == "completed" and w.get("conclusion") == "success")
-                failed = sum(1 for w in workflows if w.get("status") == "completed" and w.get("conclusion") in ["failure", "cancelled"])
+                if is_gitlab:
+                    # GitLab pipelines - status field only (no conclusion)
+                    running = sum(1 for w in workflows if w.get("status") in ["running", "pending", "created"])
+                    failed = sum(1 for w in workflows if w.get("status") == "failed")
+                    success = sum(1 for w in workflows if w.get("status") == "success")
+                    canceled = sum(1 for w in workflows if w.get("status") in ["canceled", "skipped"])
 
-                if needs_approval > 0:
-                    workflow_display = f"[red]⊙ {needs_approval} need approval[/red]"
-                elif running > 0:
-                    workflow_display = f"[yellow]▶ {running} running[/yellow]"
-                elif failed > 0:
-                    workflow_display = f"[red]✗ {failed} failed[/red]"
-                elif completed > 0:
-                    workflow_display = f"[green]✓ {completed} ok[/green]"
+                    if running > 0:
+                        workflow_display = f"[yellow]▶ {running} running[/yellow]"
+                    elif failed > 0:
+                        workflow_display = f"[red]✗ {failed} failed[/red]"
+                    elif success > 0:
+                        workflow_display = f"[green]✓ {success} ok[/green]"
+                    elif canceled > 0:
+                        workflow_display = f"[yellow]⊘ {canceled} canceled[/yellow]"
+                    else:
+                        workflow_display = f"[dim]{len(workflows)} runs[/dim]"
                 else:
-                    workflow_display = f"[dim]{len(workflows)} runs[/dim]"
+                    # GitHub workflows - status + conclusion
+                    # Note: action_required is a CONCLUSION, not a status
+                    needs_approval = sum(1 for w in workflows if w.get("conclusion") == "action_required")
+                    running = sum(1 for w in workflows if w.get("status") in ["in_progress", "queued", "waiting"])
+                    completed = sum(1 for w in workflows if w.get("status") == "completed" and w.get("conclusion") == "success")
+                    failed = sum(1 for w in workflows if w.get("status") == "completed" and w.get("conclusion") in ["failure", "cancelled"])
+
+                    if needs_approval > 0:
+                        workflow_display = f"[red]⊙ {needs_approval} need approval[/red]"
+                    elif running > 0:
+                        workflow_display = f"[yellow]▶ {running} running[/yellow]"
+                    elif failed > 0:
+                        workflow_display = f"[red]✗ {failed} failed[/red]"
+                    elif completed > 0:
+                        workflow_display = f"[green]✓ {completed} ok[/green]"
+                    else:
+                        workflow_display = f"[dim]{len(workflows)} runs[/dim]"
             else:
                 workflow_display = "[dim]None[/dim]"
 
-            # Last update
-            updated_at = service_data.get("repo", {}).get("updated_at", "")
+            # Last update - handle both GitHub and GitLab field names
+            if is_gitlab:
+                updated_at = repo_or_project.get("last_activity_at", "")
+            else:
+                updated_at = repo_or_project.get("updated_at", "")
             if updated_at:
                 try:
                     update_time = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
@@ -315,8 +382,10 @@ class StatusRunner(BaseRunner):
             for issue in issues:
                 title = issue.get("title", "")
                 if title not in issue_groups:
+                    # Handle both GitHub (number) and GitLab (iid) field names
+                    issue_number = issue.get("iid" if is_gitlab else "number")
                     issue_groups[title] = {
-                        "number": issue.get("number"),
+                        "number": issue_number,
                         "labels": issue.get("labels", []),
                         "assignees": issue.get("assignees", []),
                         "services": []
@@ -363,11 +432,12 @@ class StatusRunner(BaseRunner):
             ))
             console.print()
 
-        # Open PRs Panel - Show all open PRs with details
+        # Open PRs/MRs Panel - Show all open PRs/MRs with details
         all_prs = []
         release_prs = []  # Track release PRs separately for "Next Steps"
         for service_name, service_data in services_data.items():
-            prs = service_data.get("pull_requests", {}).get("items", [])
+            prs_key = "merge_requests" if is_gitlab else "pull_requests"
+            prs = service_data.get(prs_key, {}).get("items", [])
             for pr in prs:
                 all_prs.append((service_name, pr))
                 if pr.get("is_release", False):
@@ -376,11 +446,18 @@ class StatusRunner(BaseRunner):
         if all_prs:
             pr_content = []
             for service_name, pr in all_prs:
-                pr_number = pr.get("number")
+                # Handle both GitHub (number, is_draft) and GitLab (iid, draft) field names
+                if is_gitlab:
+                    pr_number = pr.get("iid")
+                    is_draft = pr.get("draft", False)
+                    branch = pr.get("source_branch", "unknown")
+                else:
+                    pr_number = pr.get("number")
+                    is_draft = pr.get("is_draft", False)
+                    branch = pr.get("headRefName", "unknown")
+
                 title = pr.get("title", "")
                 state = pr.get("state", "unknown").upper()
-                is_draft = pr.get("is_draft", False)
-                branch = pr.get("headRefName", "unknown")
                 is_release = pr.get("is_release", False)
                 author = pr.get("author", "unknown")
 
@@ -388,12 +465,14 @@ class StatusRunner(BaseRunner):
                 is_copilot_pr = "copilot" in branch.lower() or author == "app/copilot-swe-agent"
 
                 # Format title with state indicator
+                # Use ! prefix for GitLab MRs, # for GitHub PRs
+                pr_prefix = "!" if is_gitlab else "#"
                 if is_draft:
-                    pr_content.append(f"[yellow]#{pr_number}[/yellow] [dim](Draft)[/dim] {title}")
+                    pr_content.append(f"[yellow]{pr_prefix}{pr_number}[/yellow] [dim](Draft)[/dim] {title}")
                 elif is_release:
-                    pr_content.append(f"[magenta]#{pr_number}[/magenta] [bold]🚀 {title}[/bold]")
+                    pr_content.append(f"[magenta]{pr_prefix}{pr_number}[/magenta] [bold]🚀 {title}[/bold]")
                 else:
-                    pr_content.append(f"[cyan]#{pr_number}[/cyan] {title}")
+                    pr_content.append(f"[cyan]{pr_prefix}{pr_number}[/cyan] {title}")
 
                 # Show author for all PRs
                 if is_copilot_pr:
@@ -428,54 +507,100 @@ class StatusRunner(BaseRunner):
 
                 pr_content.append("")
 
+            panel_title = "🔀 Open Merge Requests" if is_gitlab else "🔀 Open Pull Requests"
             console.print(Panel(
                 "\n".join(pr_content),
-                title="🔀 Open Pull Requests",
+                title=panel_title,
                 border_style="magenta"
             ))
             console.print()
 
-        # Workflow Details Section
-        has_workflows = any(
-            len(service_data.get("workflows", {}).get("recent", [])) > 0
-            for service_data in services_data.values()
-        )
+        # Workflow/Pipeline Details Section
+        # Note: mr_pipelines is already collected earlier for GitLab (line 256-268)
+
+        # Check if there are any workflows/pipelines to display
+        if is_gitlab:
+            # For GitLab, check if there are any MR pipelines
+            has_workflows = any(len(mr_pipelines.get(service_name, [])) > 0
+                               for service_name in services_data.keys())
+        else:
+            # For GitHub, check if there are any workflows
+            has_workflows = any(
+                len(service_data.get("workflows", {}).get("recent", [])) > 0
+                for service_data in services_data.values()
+            )
 
         if has_workflows:
-            workflow_table = Table(title="⚙️ Recent Workflow Runs", expand=True)
+            table_title = "⚙️ MR Pipeline Runs" if is_gitlab else "⚙️ Recent Workflow Runs"
+            workflow_table = Table(title=table_title, expand=True)
             workflow_table.add_column("Service", style="cyan", no_wrap=True)
             workflow_table.add_column("Workflow", style="white")
             workflow_table.add_column("Status", style="magenta")
             workflow_table.add_column("When", style="dim")
 
             for service_name, service_data in services_data.items():
-                workflows = service_data.get("workflows", {}).get("recent", [])
+                # Get workflows/pipelines
+                if is_gitlab:
+                    # For GitLab: Use MR-specific pipelines (already collected)
+                    mr_pipeline_tuples = mr_pipelines.get(service_name, [])
+                    workflows = [p for _, p in mr_pipeline_tuples]
+                    # Create mapping of pipeline to MR IID for display
+                    pipeline_to_mr = {p.get("id"): mr_iid for mr_iid, p in mr_pipeline_tuples}
+                else:
+                    # For GitHub: Use global workflows list
+                    workflows = service_data.get("workflows", {}).get("recent", [])
+                    pipeline_to_mr = {}
+
                 if workflows:
-                    for idx, workflow in enumerate(workflows[:5]):  # Show max 5 per service
-                        name = workflow.get("name", "Unknown")
-                        status = workflow.get("status", "unknown")
-                        conclusion = workflow.get("conclusion", "")
+                    for idx, workflow in enumerate(workflows[:10]):  # Show up to 10 MR-related pipelines
                         created = workflow.get("created_at", "")
 
-                        # Format status
-                        # Note: action_required is a CONCLUSION, not a status
-                        if conclusion == "action_required":
-                            status_display = "[red bold]⊙ action_required[/red bold]"
-                        elif status == "completed":
-                            if conclusion == "success":
+                        if is_gitlab:
+                            # GitLab pipelines - simpler status (no conclusion)
+                            pipeline_id = workflow.get('id', 'Unknown')
+
+                            # Show which MR this pipeline belongs to
+                            mr_iid = pipeline_to_mr.get(pipeline_id)
+                            mr_indicator = f" (MR !{mr_iid})" if mr_iid else ""
+
+                            name = f"Pipeline #{pipeline_id}{mr_indicator}"
+                            status = workflow.get("status", "unknown")
+
+                            if status == "success":
                                 status_display = "[green]✓ success[/green]"
-                            elif conclusion == "failure":
+                            elif status == "failed":
                                 status_display = "[red]✗ failed[/red]"
-                            elif conclusion == "cancelled":
-                                status_display = "[yellow]⊘ cancelled[/yellow]"
-                            elif conclusion == "skipped":
-                                status_display = "[dim]⊘ skipped[/dim]"
+                            elif status in ["running", "pending", "created"]:
+                                status_display = f"[yellow]▶ {status}[/yellow]"
+                            elif status in ["canceled", "skipped"]:
+                                status_display = f"[yellow]⊘ {status}[/yellow]"
                             else:
-                                status_display = f"[dim]{conclusion or 'completed'}[/dim]"
-                        elif status in ["in_progress", "queued", "waiting"]:
-                            status_display = f"[yellow]▶ {status}[/yellow]"
+                                status_display = f"[dim]{status}[/dim]"
                         else:
-                            status_display = f"[dim]{status}[/dim]"
+                            # GitHub workflows - status + conclusion
+                            name = workflow.get("name", "Unknown")
+                            status = workflow.get("status", "unknown")
+                            conclusion = workflow.get("conclusion", "")
+
+                            # Format status
+                            # Note: action_required is a CONCLUSION, not a status
+                            if conclusion == "action_required":
+                                status_display = "[red bold]⊙ action_required[/red bold]"
+                            elif status == "completed":
+                                if conclusion == "success":
+                                    status_display = "[green]✓ success[/green]"
+                                elif conclusion == "failure":
+                                    status_display = "[red]✗ failed[/red]"
+                                elif conclusion == "cancelled":
+                                    status_display = "[yellow]⊘ cancelled[/yellow]"
+                                elif conclusion == "skipped":
+                                    status_display = "[dim]⊘ skipped[/dim]"
+                                else:
+                                    status_display = f"[dim]{conclusion or 'completed'}[/dim]"
+                            elif status in ["in_progress", "queued", "waiting"]:
+                                status_display = f"[yellow]▶ {status}[/yellow]"
+                            else:
+                                status_display = f"[dim]{status}[/dim]"
 
                         # Format time
                         try:
@@ -520,32 +645,62 @@ class StatusRunner(BaseRunner):
         if release_prs:
             next_steps.append(f"[magenta]🚀[/magenta] Review {len(release_prs)} release PR(s) for merging")
 
-        # Check for workflows needing approval
-        approval_needed = {}
-        for service_name, service_data in services_data.items():
-            workflows = service_data.get("workflows", {}).get("recent", [])
-            # Note: action_required is a CONCLUSION, not a status
-            needs_approval = sum(1 for w in workflows if w.get("conclusion") == "action_required")
-            if needs_approval > 0:
-                approval_needed[service_name] = needs_approval
+        # Check for workflows/pipelines needing attention
+        workflows_key = "pipelines" if is_gitlab else "workflows"
 
-        if approval_needed:
-            total_approval = sum(approval_needed.values())
-            services_list = ", ".join(approval_needed.keys())
-            next_steps.append(f"[red bold]⊙ {total_approval} workflow(s) need approval (manual)[/red bold]")
-            next_steps.append(f"  Services: {services_list}")
-            next_steps.append(f"  💡 Approve in GitHub UI for Copilot PRs to continue")
+        if is_gitlab:
+            # GitLab pipelines - check for failed pipelines (from MR-specific data)
+            failed_pipelines = {}
+            running_count = 0
 
-        # Check for running workflows
-        total_running = sum(
-            sum(1 for w in service_data.get("workflows", {}).get("recent", [])
-                if w.get("status") in ["in_progress", "queued", "waiting"])
-            for service_data in services_data.values()
-        )
-        if total_running > 0:
-            next_steps.append(f"[yellow]▶[/yellow] {total_running} workflow(s) still running")
-        elif not approval_needed:
-            next_steps.append("[green]✓[/green] All workflows completed")
+            for service_name in services_data.keys():
+                mr_pipeline_tuples = mr_pipelines.get(service_name, [])
+                pipelines = [p for _, p in mr_pipeline_tuples]
+
+                failed = [p for p in pipelines if p.get("status") == "failed"]
+                if failed:
+                    failed_pipelines[service_name] = len(failed)
+
+                running = [p for p in pipelines if p.get("status") in ["running", "pending", "created"]]
+                running_count += len(running)
+
+            if failed_pipelines:
+                total_failed = sum(failed_pipelines.values())
+                services_list = ", ".join(failed_pipelines.keys())
+                next_steps.append(f"[red]✗ {total_failed} failed MR pipeline(s)[/red]")
+                next_steps.append(f"  Services: {services_list}")
+
+            if running_count > 0:
+                next_steps.append(f"[yellow]▶[/yellow] {running_count} MR pipeline(s) still running")
+            elif not failed_pipelines:
+                next_steps.append("[green]✓[/green] All MR pipelines completed successfully")
+        else:
+            # GitHub workflows - check for approval needed
+            approval_needed = {}
+            for service_name, service_data in services_data.items():
+                workflows = service_data.get("workflows", {}).get("recent", [])
+                # Note: action_required is a CONCLUSION, not a status
+                needs_approval = sum(1 for w in workflows if w.get("conclusion") == "action_required")
+                if needs_approval > 0:
+                    approval_needed[service_name] = needs_approval
+
+            if approval_needed:
+                total_approval = sum(approval_needed.values())
+                services_list = ", ".join(approval_needed.keys())
+                next_steps.append(f"[red bold]⊙ {total_approval} workflow(s) need approval (manual)[/red bold]")
+                next_steps.append(f"  Services: {services_list}")
+                next_steps.append(f"  💡 Approve in GitHub UI for Copilot PRs to continue")
+
+            # Check for running workflows
+            total_running = sum(
+                sum(1 for w in service_data.get("workflows", {}).get("recent", [])
+                    if w.get("status") in ["in_progress", "queued", "waiting"])
+                for service_data in services_data.values()
+            )
+            if total_running > 0:
+                next_steps.append(f"[yellow]▶[/yellow] {total_running} workflow(s) still running")
+            elif not approval_needed:
+                next_steps.append("[green]✓[/green] All workflows completed")
 
         if next_steps:
             console.print(Panel(
@@ -561,10 +716,19 @@ class StatusRunner(BaseRunner):
 
     def show_config(self):
         """Display run configuration"""
-        config = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
+        if self.providers:
+            # GitLab mode
+            config = f"""[cyan]Projects:[/cyan]   {', '.join(self.services)}
+[cyan]Providers:[/cyan]  {', '.join(self.providers)}
+[cyan]Gathering:[/cyan]  Issues, Merge Requests, Pipelines"""
+            title = "🔍 GitLab Status Check"
+        else:
+            # GitHub mode
+            config = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
 [cyan]Gathering:[/cyan]  Issues, PRs, Workflows"""
+            title = "🔍 GitHub Status Check"
 
-        console.print(Panel(config, title="🔍 GitHub Status Check", border_style="blue"))
+        console.print(Panel(config, title=title, border_style="blue"))
         console.print()
 
     def run(self) -> int:
@@ -599,13 +763,17 @@ class StatusRunner(BaseRunner):
         try:
             # Start process with streaming output
             # Redirect stderr to stdout to avoid blocking issues
+            # Explicitly pass environment to ensure GitLab token is available
+            env = os.environ.copy()
             process = subprocess.Popen(
                 command,
+                stdin=subprocess.DEVNULL,  # Prevent copilot from waiting for user input
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
+                env=env,  # Pass full environment including GITLAB_TOKEN
             )
 
             # Set global process for signal handler

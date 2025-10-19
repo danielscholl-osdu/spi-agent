@@ -942,3 +942,554 @@ class GitRepositoryTools:
         except Exception as e:
             logger.error(f"Error creating branch: {e}", exc_info=True)
             return f"Error creating branch: {str(e)}"
+
+    def list_remotes(
+        self,
+        service: Annotated[
+            str,
+            Field(
+                description="Service name (e.g., 'partition', 'legal', 'storage'). "
+                "This identifies which repository in repos/ to list remotes for."
+            ),
+        ],
+    ) -> str:
+        """
+        List all configured git remotes for a repository.
+
+        Shows remote names with their fetch and push URLs.
+        All operations are restricted to the repos/ directory sandbox.
+
+        Args:
+            service: Service name to list remotes for
+
+        Returns:
+            Formatted string with remote names and URLs
+        """
+        try:
+            # Get and validate repository path
+            repo_path = self._get_repo_path(service)
+
+            # Validate it's a git repository
+            is_valid, error = self._validate_repository(repo_path)
+            if not is_valid:
+                return f"Error: {error}"
+
+            # Execute git remote -v
+            returncode, stdout, stderr = self._execute_git_command(
+                repo_path, ["git", "remote", "-v"]
+            )
+
+            if returncode != 0:
+                return f"Error listing remotes: {stderr}"
+
+            # Parse output
+            if not stdout.strip():
+                return f"No remotes configured for repository '{service}'."
+
+            # Format output
+            output_lines = [f"Remotes for repository '{service}':\n\n"]
+
+            # Parse remote output (format: "name url (fetch/push)")
+            remotes = {}
+            for line in stdout.strip().split("\n"):
+                parts = line.split()
+                if len(parts) >= 3:
+                    name = parts[0]
+                    url = parts[1]
+                    remote_type = parts[2].strip("()")
+
+                    if name not in remotes:
+                        remotes[name] = {}
+                    remotes[name][remote_type] = url
+
+            # Display remotes
+            for name in sorted(remotes.keys()):
+                output_lines.append(f"  {name}:\n")
+                if "fetch" in remotes[name]:
+                    output_lines.append(f"    Fetch: {remotes[name]['fetch']}\n")
+                if "push" in remotes[name]:
+                    output_lines.append(f"    Push:  {remotes[name]['push']}\n")
+                output_lines.append("\n")
+
+            return "".join(output_lines)
+
+        except ValueError as e:
+            return f"Error: {str(e)}"
+        except SecurityError as e:
+            return f"Security Error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Error listing remotes: {e}", exc_info=True)
+            return f"Error listing remotes: {str(e)}"
+
+    def add_remote(
+        self,
+        service: Annotated[
+            str,
+            Field(
+                description="Service name (e.g., 'partition', 'legal', 'storage'). "
+                "This identifies which repository in repos/ to add remote to."
+            ),
+        ],
+        remote_name: Annotated[
+            str,
+            Field(
+                description="Name for the remote (e.g., 'upstream', 'gitlab'). "
+                "Must contain only alphanumeric characters, hyphens, and underscores."
+            ),
+        ],
+        remote_url: Annotated[
+            str,
+            Field(
+                description="Git URL for the remote (e.g., 'https://gitlab.com/org/repo.git' or 'git@gitlab.com:org/repo.git'). "
+                "Must be a valid git URL."
+            ),
+        ],
+    ) -> str:
+        """
+        Add a new remote to a git repository.
+
+        Validates the remote name and URL before adding.
+        All operations are restricted to the repos/ directory sandbox.
+
+        Args:
+            service: Service name to add remote to
+            remote_name: Name for the new remote
+            remote_url: URL for the remote repository
+
+        Returns:
+            Formatted string with operation results
+        """
+        try:
+            # Get and validate repository path
+            repo_path = self._get_repo_path(service)
+
+            # Validate it's a git repository
+            is_valid, error = self._validate_repository(repo_path)
+            if not is_valid:
+                return f"Error: {error}"
+
+            # Validate remote name
+            remote_name = remote_name.strip()
+            if not remote_name:
+                return "Error: Remote name cannot be empty"
+
+            # Only allow alphanumeric, hyphens, underscores
+            if not re.match(r"^[a-zA-Z0-9_-]+$", remote_name):
+                return (
+                    f"Error: Invalid remote name '{remote_name}'. "
+                    "Only alphanumeric characters, hyphens, and underscores are allowed."
+                )
+
+            # Validate remote URL format
+            remote_url = remote_url.strip()
+            if not remote_url:
+                return "Error: Remote URL cannot be empty"
+
+            # Basic URL validation - must be http(s):// or git@ URL
+            if not (
+                remote_url.startswith("http://")
+                or remote_url.startswith("https://")
+                or remote_url.startswith("git@")
+                or remote_url.startswith("ssh://")
+            ):
+                return (
+                    f"Error: Invalid remote URL '{remote_url}'. "
+                    "URL must start with http://, https://, ssh://, or git@"
+                )
+
+            # Check if remote already exists
+            returncode, stdout, stderr = self._execute_git_command(
+                repo_path, ["git", "remote", "get-url", remote_name]
+            )
+
+            if returncode == 0:
+                existing_url = stdout.strip()
+                return (
+                    f"Error: Remote '{remote_name}' already exists with URL: {existing_url}\n"
+                    f"Use a different remote name or remove the existing remote first."
+                )
+
+            # Add the remote
+            returncode, stdout, stderr = self._execute_git_command(
+                repo_path, ["git", "remote", "add", remote_name, remote_url]
+            )
+
+            if returncode != 0:
+                return f"Error adding remote: {stderr}"
+
+            return (
+                f"Successfully added remote '{remote_name}' to repository '{service}':\n"
+                f"  URL: {remote_url}"
+            )
+
+        except ValueError as e:
+            return f"Error: {str(e)}"
+        except SecurityError as e:
+            return f"Security Error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Error adding remote: {e}", exc_info=True)
+            return f"Error adding remote: {str(e)}"
+
+    def remove_remote(
+        self,
+        service: Annotated[
+            str,
+            Field(
+                description="Service name (e.g., 'partition', 'legal', 'storage'). "
+                "This identifies which repository in repos/ to remove remote from."
+            ),
+        ],
+        remote_name: Annotated[
+            str,
+            Field(
+                description="Name of the remote to remove (e.g., 'upstream', 'gitlab')."
+            ),
+        ],
+    ) -> str:
+        """
+        Remove a remote from a git repository.
+
+        Includes safety warnings when removing 'origin' remote.
+        All operations are restricted to the repos/ directory sandbox.
+
+        Args:
+            service: Service name to remove remote from
+            remote_name: Name of the remote to remove
+
+        Returns:
+            Formatted string with operation results
+        """
+        try:
+            # Get and validate repository path
+            repo_path = self._get_repo_path(service)
+
+            # Validate it's a git repository
+            is_valid, error = self._validate_repository(repo_path)
+            if not is_valid:
+                return f"Error: {error}"
+
+            # Validate remote name
+            remote_name = remote_name.strip()
+            if not remote_name:
+                return "Error: Remote name cannot be empty"
+
+            # Check if remote exists
+            returncode, stdout, stderr = self._execute_git_command(
+                repo_path, ["git", "remote", "get-url", remote_name]
+            )
+
+            if returncode != 0:
+                return f"Error: Remote '{remote_name}' does not exist in repository '{service}'."
+
+            remote_url = stdout.strip()
+
+            # Safety warning for removing 'origin'
+            warning = ""
+            if remote_name == "origin":
+                # Check if there are tracking branches
+                returncode, stdout, stderr = self._execute_git_command(
+                    repo_path, ["git", "branch", "-vv"]
+                )
+                if returncode == 0 and "origin/" in stdout:
+                    warning = (
+                        "\nWARNING: You are removing the 'origin' remote which has tracking branches.\n"
+                        "This may affect your ability to push/pull.\n\n"
+                    )
+
+            # Remove the remote
+            returncode, stdout, stderr = self._execute_git_command(
+                repo_path, ["git", "remote", "remove", remote_name]
+            )
+
+            if returncode != 0:
+                return f"Error removing remote: {stderr}"
+
+            return (
+                f"{warning}"
+                f"Successfully removed remote '{remote_name}' from repository '{service}'.\n"
+                f"  (URL was: {remote_url})"
+            )
+
+        except ValueError as e:
+            return f"Error: {str(e)}"
+        except SecurityError as e:
+            return f"Security Error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Error removing remote: {e}", exc_info=True)
+            return f"Error removing remote: {str(e)}"
+
+    def configure_upstream_remote(
+        self,
+        service: Annotated[
+            str,
+            Field(
+                description="Service name (e.g., 'partition', 'legal', 'storage'). "
+                "This identifies which repository to configure upstream for."
+            ),
+        ],
+        remote_name: Annotated[
+            str,
+            Field(description="Name for the upstream remote (default: 'upstream')"),
+        ] = "upstream",
+        fetch_after_add: Annotated[
+            bool,
+            Field(description="Whether to fetch from upstream after adding (default: True)"),
+        ] = True,
+    ) -> str:
+        """
+        Automatically configure upstream remote from GitHub repository variable.
+
+        This orchestrates multiple operations:
+        1. Retrieves UPSTREAM_REPO_URL from GitHub Actions repository variables
+        2. Validates the URL format
+        3. Adds the remote if not already present
+        4. Optionally fetches from the upstream to verify connectivity
+
+        This enables GitHub forks to maintain connections with their GitLab upstream sources.
+
+        Args:
+            service: Service name to configure upstream for
+            remote_name: Name for the upstream remote (default: 'upstream')
+            fetch_after_add: Whether to fetch after adding remote
+
+        Returns:
+            Formatted string with configuration results
+        """
+        try:
+            # Get and validate repository path
+            repo_path = self._get_repo_path(service)
+
+            # Validate it's a git repository
+            is_valid, error = self._validate_repository(repo_path)
+            if not is_valid:
+                return f"Error: {error}"
+
+            output_lines = [f"Configuring upstream remote for '{service}'...\n\n"]
+
+            # Import RepositoryVariableTools to get UPSTREAM_REPO_URL
+            from spi_agent.github.variables import RepositoryVariableTools
+
+            variables_tool = RepositoryVariableTools(self.config)
+
+            # Get UPSTREAM_REPO_URL variable
+            result = variables_tool.get_repository_variable(service, "UPSTREAM_REPO_URL")
+
+            # Parse the result to extract the URL
+            if "Error" in result or "not found" in result:
+                output_lines.append(f"Failed to retrieve UPSTREAM_REPO_URL:\n{result}\n\n")
+                output_lines.append(
+                    "To configure upstream manually, use:\n"
+                    f"  add_remote(service='{service}', remote_name='{remote_name}', remote_url='<url>')"
+                )
+                return "".join(output_lines)
+
+            # Extract URL from result (format: "UPSTREAM_REPO_URL: <url>")
+            if ":" in result:
+                upstream_url = result.split(":", 1)[1].strip()
+            else:
+                return f"Error: Unexpected format from variable retrieval: {result}"
+
+            output_lines.append(f"Retrieved UPSTREAM_REPO_URL: {upstream_url}\n\n")
+
+            # Validate URL format
+            if not (
+                upstream_url.startswith("http://")
+                or upstream_url.startswith("https://")
+                or upstream_url.startswith("git@")
+                or upstream_url.startswith("ssh://")
+            ):
+                return (
+                    f"Error: Invalid upstream URL format: {upstream_url}\n"
+                    "URL must start with http://, https://, ssh://, or git@"
+                )
+
+            # Check if remote already exists
+            returncode, stdout, stderr = self._execute_git_command(
+                repo_path, ["git", "remote", "get-url", remote_name]
+            )
+
+            if returncode == 0:
+                existing_url = stdout.strip()
+                if existing_url == upstream_url:
+                    output_lines.append(
+                        f"Remote '{remote_name}' is already configured with the correct URL.\n"
+                        f"  URL: {existing_url}\n"
+                    )
+                    # Still fetch if requested
+                    if fetch_after_add:
+                        output_lines.append(f"\nFetching from '{remote_name}'...\n")
+                        returncode, stdout, stderr = self._execute_git_command(
+                            repo_path, ["git", "fetch", remote_name], timeout=60
+                        )
+                        if returncode == 0:
+                            output_lines.append("Fetch successful.\n")
+                        else:
+                            output_lines.append(f"Fetch failed: {stderr}\n")
+                    return "".join(output_lines)
+                else:
+                    output_lines.append(
+                        f"WARNING: Remote '{remote_name}' exists but with a different URL:\n"
+                        f"  Existing: {existing_url}\n"
+                        f"  Expected: {upstream_url}\n\n"
+                        f"Manual intervention required. You can:\n"
+                        f"  1. Remove the existing remote: remove_remote(service='{service}', remote_name='{remote_name}')\n"
+                        f"  2. Add upstream with a different name: add_remote(...)\n"
+                    )
+                    return "".join(output_lines)
+
+            # Add the remote
+            output_lines.append(f"Adding remote '{remote_name}'...\n")
+            returncode, stdout, stderr = self._execute_git_command(
+                repo_path, ["git", "remote", "add", remote_name, upstream_url]
+            )
+
+            if returncode != 0:
+                return f"Error adding remote: {stderr}"
+
+            output_lines.append(f"Successfully added remote '{remote_name}'.\n")
+
+            # Fetch if requested
+            if fetch_after_add:
+                output_lines.append(f"\nFetching from '{remote_name}'...\n")
+                returncode, stdout, stderr = self._execute_git_command(
+                    repo_path, ["git", "fetch", remote_name], timeout=60
+                )
+                if returncode == 0:
+                    output_lines.append("Fetch successful.\n")
+                else:
+                    output_lines.append(f"WARNING: Fetch failed: {stderr}\n")
+                    output_lines.append("Remote was added but may not be accessible.\n")
+
+            output_lines.append(
+                f"\nUpstream remote configured for '{service}':\n"
+                f"  Remote: {remote_name}\n"
+                f"  URL: {upstream_url}\n"
+            )
+
+            return "".join(output_lines)
+
+        except ValueError as e:
+            return f"Error: {str(e)}"
+        except SecurityError as e:
+            return f"Security Error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Error configuring upstream remote: {e}", exc_info=True)
+            return f"Error configuring upstream remote: {str(e)}"
+
+    def configure_all_upstream_remotes(
+        self,
+        remote_name: Annotated[
+            str,
+            Field(description="Name for the upstream remote (default: 'upstream')"),
+        ] = "upstream",
+        fetch_after_add: Annotated[
+            bool,
+            Field(description="Whether to fetch from upstream after adding (default: False for batch)"),
+        ] = False,
+    ) -> str:
+        """
+        Configure upstream remotes for all local repositories.
+
+        Batch operation that iterates through all repositories in repos/ directory
+        and attempts to configure upstream for each one.
+
+        Args:
+            remote_name: Name for the upstream remote (default: 'upstream')
+            fetch_after_add: Whether to fetch after adding (default: False to speed up batch)
+
+        Returns:
+            Summary of batch configuration results
+        """
+        try:
+            # Check if repos directory exists
+            if not self.repos_dir.exists():
+                return (
+                    "No repositories found. The repos/ directory does not exist.\n"
+                    "Use the fork workflow to clone repositories first."
+                )
+
+            # Find all subdirectories in repos/
+            subdirs = [d for d in self.repos_dir.iterdir() if d.is_dir()]
+
+            if not subdirs:
+                return (
+                    f"No repositories found in {self.repos_dir}\n"
+                    "Use the fork workflow to clone repositories first."
+                )
+
+            output_lines = [
+                f"Configuring upstream remotes for all local repositories...\n\n"
+            ]
+
+            successes = []
+            failures = []
+            skipped = []
+
+            for repo_dir in subdirs:
+                service = repo_dir.name
+
+                # Validate path is sandboxed
+                try:
+                    self._validate_repo_path_is_sandboxed(repo_dir)
+                except SecurityError:
+                    logger.warning(f"Skipping directory outside sandbox: {repo_dir}")
+                    skipped.append((service, "Outside sandbox"))
+                    continue
+
+                # Check if it's a valid git repository
+                is_valid, error = self._validate_repository(repo_dir)
+                if not is_valid:
+                    skipped.append((service, "Not a git repository"))
+                    continue
+
+                # Attempt to configure upstream
+                output_lines.append(f"Processing '{service}'...\n")
+                result = self.configure_upstream_remote(service, remote_name, fetch_after_add)
+
+                # Determine success/failure
+                if "Error" in result or "Failed" in result or "WARNING" in result:
+                    # Extract first line of error for summary
+                    error_summary = result.split("\n")[0]
+                    failures.append((service, error_summary))
+                    output_lines.append(f"  FAILED\n\n")
+                elif "already configured" in result:
+                    successes.append((service, "Already configured"))
+                    output_lines.append(f"  Already configured\n\n")
+                else:
+                    successes.append((service, "Configured successfully"))
+                    output_lines.append(f"  SUCCESS\n\n")
+
+            # Summary
+            output_lines.append("="* 60 + "\n")
+            output_lines.append("BATCH CONFIGURATION SUMMARY\n")
+            output_lines.append("=" * 60 + "\n\n")
+
+            total = len(subdirs)
+            output_lines.append(f"Total repositories processed: {total}\n")
+            output_lines.append(f"  Successful: {len(successes)}\n")
+            output_lines.append(f"  Failed: {len(failures)}\n")
+            output_lines.append(f"  Skipped: {len(skipped)}\n\n")
+
+            if successes:
+                output_lines.append("Successful configurations:\n")
+                for service, status in successes:
+                    output_lines.append(f"  ✓ {service}: {status}\n")
+                output_lines.append("\n")
+
+            if failures:
+                output_lines.append("Failed configurations:\n")
+                for service, error in failures:
+                    output_lines.append(f"  ✗ {service}: {error}\n")
+                output_lines.append("\n")
+
+            if skipped:
+                output_lines.append("Skipped:\n")
+                for service, reason in skipped:
+                    output_lines.append(f"  - {service}: {reason}\n")
+                output_lines.append("\n")
+
+            return "".join(output_lines)
+
+        except Exception as e:
+            logger.error(f"Error in batch upstream configuration: {e}", exc_info=True)
+            return f"Error in batch upstream configuration: {str(e)}"

@@ -1,7 +1,7 @@
 """Pytest configuration and fixtures."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict
 from unittest.mock import Mock
 
 import pytest
@@ -370,3 +370,183 @@ def mock_github_repo_with_code_scanning(
     mock_github_repo.url = "https://api.github.com/repos/test-org/test-repo1"
 
     return mock_github_repo
+
+
+# ========== GitLab Fixtures ==========
+
+
+@pytest.fixture
+def gitlab_config() -> AgentConfig:
+    """Provide test configuration with GitLab settings."""
+    return AgentConfig(
+        organization="test-org",
+        repositories=["test-repo1"],
+        gitlab_url="https://gitlab.example.com",
+        gitlab_token="test_gitlab_token",
+        gitlab_default_group="test-group",
+    )
+
+
+@pytest.fixture
+def mock_gitlab_issue() -> Mock:
+    """Create a mock GitLab issue object."""
+    issue = Mock()
+    issue.iid = 42
+    issue.id = 142
+    issue.title = "Test GitLab Issue"
+    issue.description = "This is a test GitLab issue description"
+    issue.state = "opened"
+    issue.labels = ["bug", "priority::high"]
+    issue.assignees = [{"username": "testuser"}]
+    issue.author = {"username": "issueauthor"}
+    issue.created_at = "2025-01-06T10:00:00Z"
+    issue.updated_at = "2025-01-06T12:00:00Z"
+    issue.web_url = "https://gitlab.example.com/test-group/test-project/-/issues/42"
+    issue.upvotes = 5
+    issue.downvotes = 0
+    return issue
+
+
+@pytest.fixture
+def mock_gitlab_note() -> Mock:
+    """Create a mock GitLab note/comment object."""
+    note = Mock()
+    note.id = 1
+    note.body = "This is a test note"
+    note.author = {"username": "noteauthor"}
+    note.created_at = "2025-01-06T11:00:00Z"
+    note.updated_at = "2025-01-06T11:00:00Z"
+    note.system = False
+    return note
+
+
+@pytest.fixture
+def mock_gitlab_mr() -> Mock:
+    """Create a mock GitLab merge request object."""
+    mr = Mock()
+    mr.iid = 123
+    mr.id = 223
+    mr.title = "Test Merge Request"
+    mr.description = "This is a test MR description"
+    mr.state = "opened"
+    mr.draft = False
+    mr.merged_at = None
+    mr.source_branch = "feature/test"
+    mr.target_branch = "main"
+    mr.labels = ["enhancement"]
+    mr.assignees = [{"username": "testuser"}]
+    mr.author = {"username": "mrauthor"}
+    mr.created_at = "2025-01-06T10:00:00Z"
+    mr.updated_at = "2025-01-06T12:00:00Z"
+    mr.web_url = "https://gitlab.example.com/test-group/test-project/-/merge_requests/123"
+    mr.merge_status = "can_be_merged"
+    mr.has_conflicts = False
+    mr.changes_count = "5"
+    mr.upvotes = 3
+    mr.downvotes = 0
+    return mr
+
+
+@pytest.fixture
+def mock_gitlab_pipeline() -> Mock:
+    """Create a mock GitLab pipeline object."""
+    pipeline = Mock()
+    pipeline.id = 987654
+    pipeline.iid = 42
+    pipeline.status = "success"
+    pipeline.ref = "main"
+    pipeline.sha = "abc123def456789"
+    pipeline.created_at = "2025-01-06T10:00:00Z"
+    pipeline.updated_at = "2025-01-06T10:05:00Z"
+    pipeline.started_at = "2025-01-06T10:00:15Z"
+    pipeline.finished_at = "2025-01-06T10:05:00Z"
+    pipeline.duration = 285
+    pipeline.web_url = "https://gitlab.example.com/test-group/test-project/-/pipelines/987654"
+    pipeline.user = {"username": "testuser"}
+    return pipeline
+
+
+@pytest.fixture
+def mock_gitlab_job() -> Mock:
+    """Create a mock GitLab pipeline job object."""
+    job = Mock()
+    job.id = 123456
+    job.name = "test-job"
+    job.status = "success"
+    job.stage = "test"
+    job.ref = "main"
+    job.created_at = "2025-01-06T10:00:00Z"
+    job.started_at = "2025-01-06T10:00:30Z"
+    job.finished_at = "2025-01-06T10:02:00Z"
+    job.duration = 90
+    job.web_url = "https://gitlab.example.com/test-group/test-project/-/jobs/123456"
+    job.user = {"username": "testuser"}
+    return job
+
+
+@pytest.fixture
+def mock_gitlab_project(
+    mock_gitlab_issue: Mock, mock_gitlab_mr: Mock, mock_gitlab_pipeline: Mock
+) -> Mock:
+    """Create a mock GitLab project object."""
+    project = Mock()
+    project.id = 1
+    project.name = "test-project"
+    project.path_with_namespace = "test-group/test-project"
+
+    # Mock issues manager
+    project.issues = Mock()
+    project.issues.list = Mock(return_value=[mock_gitlab_issue])
+    project.issues.get = Mock(return_value=mock_gitlab_issue)
+    project.issues.create = Mock(return_value=mock_gitlab_issue)
+
+    # Mock merge requests manager
+    project.mergerequests = Mock()
+    project.mergerequests.list = Mock(return_value=[mock_gitlab_mr])
+    project.mergerequests.get = Mock(return_value=mock_gitlab_mr)
+    project.mergerequests.create = Mock(return_value=mock_gitlab_mr)
+
+    # Mock pipelines manager
+    project.pipelines = Mock()
+    project.pipelines.list = Mock(return_value=[mock_gitlab_pipeline])
+    project.pipelines.get = Mock(return_value=mock_gitlab_pipeline)
+    project.pipelines.create = Mock(return_value=mock_gitlab_pipeline)
+
+    return project
+
+
+@pytest.fixture
+def mock_gitlab_client(mock_gitlab_project: Mock) -> Mock:
+    """Create a mock GitLab client."""
+    client = Mock()
+
+    # Mock projects manager
+    client.projects = Mock()
+    client.projects.get = Mock(return_value=mock_gitlab_project)
+
+    # Mock users manager
+    mock_user = Mock()
+    mock_user.id = 1
+    mock_user.username = "testuser"
+    client.users = Mock()
+    client.users.list = Mock(return_value=[mock_user])
+
+    # Mock issues manager (for global search)
+    client.issues = Mock()
+    client.issues.list = Mock(return_value=[])
+
+    # Mock auth
+    client.auth = Mock()
+
+    return client
+
+
+@pytest.fixture
+def mock_gitlab(monkeypatch: Any, mock_gitlab_client: Mock) -> Mock:
+    """Mock the GitLab class constructor."""
+
+    def mock_gitlab_constructor(*args: Any, **kwargs: Any) -> Mock:
+        return mock_gitlab_client
+
+    monkeypatch.setattr("spi_agent.gitlab.base.gitlab.Gitlab", mock_gitlab_constructor)
+    return mock_gitlab_client

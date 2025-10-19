@@ -870,18 +870,19 @@ class TestToolsIntegration:
     """Integration tests for git tools."""
 
     def test_create_git_tools_returns_correct_count(self):
-        """Test that create_git_tools returns all 7 tools."""
+        """Test that create_git_tools returns all 12 tools."""
         from spi_agent.git import create_git_tools
 
         config = AgentConfig()
         tools = create_git_tools(config)
 
-        # Should have 7 tools
-        assert len(tools) == 7
+        # Should have 12 tools (7 repo management + 3 remote management + 2 upstream config)
+        assert len(tools) == 12
 
         # Verify tool names
         tool_names = [tool.__name__ for tool in tools]
         expected_tools = [
+            # Repository Management (7 tools)
             "list_local_repositories",
             "get_repository_status",
             "reset_repository",
@@ -889,6 +890,13 @@ class TestToolsIntegration:
             "pull_repository",
             "pull_all_repositories",
             "create_branch",
+            # Remote Management (3 tools)
+            "list_remotes",
+            "add_remote",
+            "remove_remote",
+            # Upstream Configuration (2 tools)
+            "configure_upstream_remote",
+            "configure_all_upstream_remotes",
         ]
 
         for expected in expected_tools:
@@ -904,3 +912,343 @@ class TestToolsIntegration:
         # Check that tools have annotations (required for agent framework)
         for tool in tools:
             assert hasattr(tool, "__annotations__") or hasattr(tool.__func__, "__annotations__")
+
+
+class TestRemoteManagement:
+    """Test git remote management operations."""
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_list_remotes_single_remote(self, mock_validate, mock_execute, git_tools):
+        """Test listing remotes when repository has one remote."""
+        mock_validate.return_value = (True, "")
+        mock_execute.return_value = (
+            0,
+            "origin\thttps://github.com/org/partition.git (fetch)\n"
+            "origin\thttps://github.com/org/partition.git (push)\n",
+            "",
+        )
+
+        result = git_tools.list_remotes("partition")
+
+        assert "Remotes for repository 'partition'" in result
+        assert "origin:" in result
+        assert "https://github.com/org/partition.git" in result
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_list_remotes_multiple_remotes(self, mock_validate, mock_execute, git_tools):
+        """Test listing remotes when repository has multiple remotes."""
+        mock_validate.return_value = (True, "")
+        mock_execute.return_value = (
+            0,
+            "origin\thttps://github.com/org/partition.git (fetch)\n"
+            "origin\thttps://github.com/org/partition.git (push)\n"
+            "upstream\thttps://gitlab.com/osdu/partition.git (fetch)\n"
+            "upstream\thttps://gitlab.com/osdu/partition.git (push)\n",
+            "",
+        )
+
+        result = git_tools.list_remotes("partition")
+
+        assert "origin:" in result
+        assert "upstream:" in result
+        assert "github.com" in result
+        assert "gitlab.com" in result
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_list_remotes_no_remotes(self, mock_validate, mock_execute, git_tools):
+        """Test listing remotes when repository has no remotes configured."""
+        mock_validate.return_value = (True, "")
+        mock_execute.return_value = (0, "", "")
+
+        result = git_tools.list_remotes("partition")
+
+        assert "No remotes configured" in result
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_add_remote_success(self, mock_validate, mock_execute, git_tools):
+        """Test successfully adding a new remote."""
+        mock_validate.return_value = (True, "")
+        # First call: check if remote exists (should fail)
+        # Second call: add remote (should succeed)
+        mock_execute.side_effect = [
+            (1, "", ""),  # get-url fails (remote doesn't exist)
+            (0, "", ""),  # add succeeds
+        ]
+
+        result = git_tools.add_remote(
+            "partition", "upstream", "https://gitlab.com/osdu/partition.git"
+        )
+
+        assert "Successfully added remote 'upstream'" in result
+        assert "gitlab.com" in result
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_add_remote_already_exists(self, mock_validate, mock_execute, git_tools):
+        """Test adding a remote that already exists."""
+        mock_validate.return_value = (True, "")
+        mock_execute.return_value = (0, "https://github.com/org/partition.git\n", "")
+
+        result = git_tools.add_remote(
+            "partition", "origin", "https://gitlab.com/osdu/partition.git"
+        )
+
+        assert "Error" in result
+        assert "already exists" in result
+
+    def test_add_remote_invalid_url(self, git_tools):
+        """Test adding a remote with invalid URL."""
+        with patch.object(GitRepositoryTools, "_validate_repository", return_value=(True, "")):
+            result = git_tools.add_remote("partition", "upstream", "not-a-valid-url")
+
+            assert "Error" in result
+            assert "Invalid remote URL" in result
+
+    def test_add_remote_invalid_name(self, git_tools):
+        """Test adding a remote with invalid name."""
+        with patch.object(GitRepositoryTools, "_validate_repository", return_value=(True, "")):
+            result = git_tools.add_remote(
+                "partition", "up@stream", "https://gitlab.com/osdu/partition.git"
+            )
+
+            assert "Error" in result
+            assert "Invalid remote name" in result
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_remove_remote_success(self, mock_validate, mock_execute, git_tools):
+        """Test successfully removing a remote."""
+        mock_validate.return_value = (True, "")
+        mock_execute.side_effect = [
+            (0, "https://gitlab.com/osdu/partition.git\n", ""),  # get-url succeeds
+            (0, "", ""),  # remove succeeds
+        ]
+
+        result = git_tools.remove_remote("partition", "upstream")
+
+        assert "Successfully removed remote 'upstream'" in result
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_remove_remote_not_found(self, mock_validate, mock_execute, git_tools):
+        """Test removing a remote that doesn't exist."""
+        mock_validate.return_value = (True, "")
+        mock_execute.return_value = (1, "", "")
+
+        result = git_tools.remove_remote("partition", "nonexistent")
+
+        assert "Error" in result
+        assert "does not exist" in result
+
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_remove_remote_origin_warning(self, mock_validate, mock_execute, git_tools):
+        """Test removing origin remote shows warning."""
+        mock_validate.return_value = (True, "")
+        mock_execute.side_effect = [
+            (0, "https://github.com/org/partition.git\n", ""),  # get-url succeeds
+            (0, "* main origin/main\n", ""),  # branch -vv shows tracking
+            (0, "", ""),  # remove succeeds
+        ]
+
+        result = git_tools.remove_remote("partition", "origin")
+
+        assert "WARNING" in result
+        assert "tracking branches" in result
+        assert "Successfully removed" in result
+
+
+class TestUpstreamConfiguration:
+    """Test upstream remote configuration orchestration."""
+
+    @patch("spi_agent.github.variables.RepositoryVariableTools")
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_configure_upstream_remote_success(
+        self, mock_validate, mock_execute, mock_var_tools_class, git_tools
+    ):
+        """Test successfully configuring upstream remote."""
+        mock_validate.return_value = (True, "")
+
+        # Mock variable retrieval
+        mock_var_tools = MagicMock()
+        mock_var_tools.get_repository_variable.return_value = (
+            "UPSTREAM_REPO_URL: https://gitlab.com/osdu/partition.git"
+        )
+        mock_var_tools_class.return_value = mock_var_tools
+
+        # Mock git commands
+        mock_execute.side_effect = [
+            (1, "", ""),  # get-url fails (remote doesn't exist)
+            (0, "", ""),  # add remote succeeds
+            (0, "", ""),  # fetch succeeds
+        ]
+
+        result = git_tools.configure_upstream_remote("partition")
+
+        assert "Retrieved UPSTREAM_REPO_URL" in result
+        assert "gitlab.com" in result
+        assert "Successfully added remote 'upstream'" in result
+        assert "Fetch successful" in result
+
+    @patch("spi_agent.github.variables.RepositoryVariableTools")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_configure_upstream_remote_variable_not_found(
+        self, mock_validate, mock_var_tools_class, git_tools
+    ):
+        """Test configuring upstream when variable doesn't exist."""
+        mock_validate.return_value = (True, "")
+
+        # Mock variable retrieval failure
+        mock_var_tools = MagicMock()
+        mock_var_tools.get_repository_variable.return_value = (
+            "Variable 'UPSTREAM_REPO_URL' not found in repository 'test-org/partition'."
+        )
+        mock_var_tools_class.return_value = mock_var_tools
+
+        result = git_tools.configure_upstream_remote("partition")
+
+        assert "Failed to retrieve UPSTREAM_REPO_URL" in result
+        assert "not found" in result
+
+    @patch("spi_agent.github.variables.RepositoryVariableTools")
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_configure_upstream_remote_already_configured(
+        self, mock_validate, mock_execute, mock_var_tools_class, git_tools
+    ):
+        """Test configuring upstream when already configured with same URL."""
+        mock_validate.return_value = (True, "")
+
+        # Mock variable retrieval
+        mock_var_tools = MagicMock()
+        mock_var_tools.get_repository_variable.return_value = (
+            "UPSTREAM_REPO_URL: https://gitlab.com/osdu/partition.git"
+        )
+        mock_var_tools_class.return_value = mock_var_tools
+
+        # Mock git commands - remote already exists with same URL
+        mock_execute.side_effect = [
+            (0, "https://gitlab.com/osdu/partition.git\n", ""),  # get-url succeeds
+            (0, "", ""),  # fetch succeeds
+        ]
+
+        result = git_tools.configure_upstream_remote("partition")
+
+        assert "already configured" in result
+        assert "correct URL" in result
+
+    @patch("spi_agent.github.variables.RepositoryVariableTools")
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_configure_upstream_remote_url_mismatch(
+        self, mock_validate, mock_execute, mock_var_tools_class, git_tools
+    ):
+        """Test configuring upstream when remote exists with different URL."""
+        mock_validate.return_value = (True, "")
+
+        # Mock variable retrieval
+        mock_var_tools = MagicMock()
+        mock_var_tools.get_repository_variable.return_value = (
+            "UPSTREAM_REPO_URL: https://gitlab.com/osdu/partition.git"
+        )
+        mock_var_tools_class.return_value = mock_var_tools
+
+        # Mock git commands - remote exists with different URL
+        mock_execute.return_value = (
+            0,
+            "https://different-url.com/partition.git\n",
+            "",
+        )
+
+        result = git_tools.configure_upstream_remote("partition")
+
+        assert "WARNING" in result
+        assert "different URL" in result
+        assert "Manual intervention required" in result
+
+    @patch("spi_agent.github.variables.RepositoryVariableTools")
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    def test_configure_upstream_remote_no_fetch(
+        self, mock_validate, mock_execute, mock_var_tools_class, git_tools
+    ):
+        """Test configuring upstream without fetching."""
+        mock_validate.return_value = (True, "")
+
+        # Mock variable retrieval
+        mock_var_tools = MagicMock()
+        mock_var_tools.get_repository_variable.return_value = (
+            "UPSTREAM_REPO_URL: https://gitlab.com/osdu/partition.git"
+        )
+        mock_var_tools_class.return_value = mock_var_tools
+
+        # Mock git commands
+        mock_execute.side_effect = [
+            (1, "", ""),  # get-url fails (remote doesn't exist)
+            (0, "", ""),  # add remote succeeds
+        ]
+
+        result = git_tools.configure_upstream_remote("partition", fetch_after_add=False)
+
+        assert "Successfully added remote 'upstream'" in result
+        assert "Fetch" not in result  # Should not fetch
+
+    @patch("spi_agent.github.variables.RepositoryVariableTools")
+    @patch.object(GitRepositoryTools, "_execute_git_command")
+    @patch.object(GitRepositoryTools, "_validate_repository")
+    @patch.object(Path, "iterdir")
+    @patch.object(Path, "exists")
+    def test_configure_all_upstream_remotes(
+        self,
+        mock_exists,
+        mock_iterdir,
+        mock_validate,
+        mock_execute,
+        mock_var_tools_class,
+        git_tools,
+    ):
+        """Test batch configuration of upstream remotes."""
+        mock_exists.return_value = True
+
+        # Mock two repositories
+        mock_repo1 = MagicMock()
+        mock_repo1.name = "partition"
+        mock_repo1.is_dir.return_value = True
+
+        mock_repo2 = MagicMock()
+        mock_repo2.name = "legal"
+        mock_repo2.is_dir.return_value = True
+
+        mock_iterdir.return_value = [mock_repo1, mock_repo2]
+
+        mock_validate.return_value = (True, "")
+
+        # Mock variable retrieval
+        mock_var_tools = MagicMock()
+
+        def get_var_side_effect(service, var_name):
+            if service == "partition":
+                return "UPSTREAM_REPO_URL: https://gitlab.com/osdu/partition.git"
+            elif service == "legal":
+                return "Variable 'UPSTREAM_REPO_URL' not found"
+
+        mock_var_tools.get_repository_variable.side_effect = get_var_side_effect
+        mock_var_tools_class.return_value = mock_var_tools
+
+        # Mock git commands - partition succeeds, legal fails
+        mock_execute.side_effect = [
+            (1, "", ""),  # partition: get-url fails (remote doesn't exist)
+            (0, "", ""),  # partition: add succeeds
+            # legal will fail because variable not found
+        ]
+
+        result = git_tools.configure_all_upstream_remotes()
+
+        assert "BATCH CONFIGURATION SUMMARY" in result
+        assert "Total repositories processed" in result
+        assert "Successful:" in result or "Failed:" in result

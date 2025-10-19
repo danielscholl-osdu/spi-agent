@@ -109,6 +109,8 @@ def test_agent_has_required_tools():
     ) as mock_create_fs_tools, patch(
         "spi_agent.agent.create_git_tools"
     ) as mock_create_git_tools, patch(
+        "spi_agent.agent.create_gitlab_tools"
+    ) as mock_create_gitlab_tools, patch(
         "spi_agent.agent.ChatAgent"
     ) as mock_chat_agent:
 
@@ -116,9 +118,11 @@ def test_agent_has_required_tools():
         github_tools = [Mock(), Mock(), Mock()]
         fs_tools = [Mock(), Mock()]
         git_tools = [Mock(), Mock()]
+        gitlab_tools = []  # No GitLab tools for this test
         mock_create_github_tools.return_value = github_tools
         mock_create_fs_tools.return_value = fs_tools
         mock_create_git_tools.return_value = git_tools
+        mock_create_gitlab_tools.return_value = gitlab_tools
 
         agent = SPIAgent()
 
@@ -126,7 +130,7 @@ def test_agent_has_required_tools():
         mock_chat_agent.assert_called_once()
         call_kwargs = mock_chat_agent.call_args[1]
 
-        assert call_kwargs["tools"] == github_tools + fs_tools + git_tools
+        assert call_kwargs["tools"] == github_tools + fs_tools + git_tools + gitlab_tools
         assert call_kwargs["name"] == "SPI GitHub Issues Agent"
 
 
@@ -139,17 +143,21 @@ def test_agent_with_mcp_tools():
     ) as mock_create_fs_tools, patch(
         "spi_agent.agent.create_git_tools"
     ) as mock_create_git_tools, patch(
+        "spi_agent.agent.create_gitlab_tools"
+    ) as mock_create_gitlab_tools, patch(
         "spi_agent.agent.ChatAgent"
     ) as mock_chat_agent:
 
-        # Mock GitHub, filesystem, git, and MCP tools
+        # Mock GitHub, filesystem, git, GitLab, and MCP tools
         github_tools = [Mock(), Mock()]
         fs_tools = [Mock()]
         git_tools = [Mock()]
+        gitlab_tools = []  # No GitLab tools for this test
         mcp_tools = [Mock()]
         mock_create_github_tools.return_value = github_tools
         mock_create_fs_tools.return_value = fs_tools
         mock_create_git_tools.return_value = git_tools
+        mock_create_gitlab_tools.return_value = gitlab_tools
 
         agent = SPIAgent(mcp_tools=mcp_tools)
 
@@ -157,9 +165,9 @@ def test_agent_with_mcp_tools():
         mock_chat_agent.assert_called_once()
         call_kwargs = mock_chat_agent.call_args[1]
 
-        # Should have GitHub, filesystem, git, and MCP tools
+        # Should have GitHub, filesystem, git, GitLab, and MCP tools
         assert len(call_kwargs["tools"]) == 5
-        assert call_kwargs["tools"] == github_tools + fs_tools + git_tools + mcp_tools
+        assert call_kwargs["tools"] == github_tools + fs_tools + git_tools + gitlab_tools + mcp_tools
 
 
 def test_agent_instructions_include_maven_capabilities(test_config: AgentConfig):

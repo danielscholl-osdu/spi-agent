@@ -19,6 +19,9 @@ class AgentConfig:
         organization: GitHub organization name
         repositories: List of repository names to manage
         github_token: GitHub personal access token (optional, can use env var)
+        gitlab_url: GitLab instance URL (optional, defaults to https://gitlab.com)
+        gitlab_token: GitLab personal access token (optional)
+        gitlab_default_group: Default GitLab group/namespace (optional)
         azure_openai_endpoint: Azure OpenAI endpoint URL
         azure_openai_deployment: Azure OpenAI deployment/model name
         azure_openai_api_version: Azure OpenAI API version
@@ -39,6 +42,17 @@ class AgentConfig:
     )
 
     github_token: Optional[str] = field(default_factory=lambda: os.getenv("GITHUB_TOKEN"))
+
+    # GitLab Configuration
+    gitlab_url: Optional[str] = field(
+        default_factory=lambda: os.getenv("GITLAB_URL", "https://gitlab.com")
+    )
+
+    gitlab_token: Optional[str] = field(default_factory=lambda: os.getenv("GITLAB_TOKEN"))
+
+    gitlab_default_group: Optional[str] = field(
+        default_factory=lambda: os.getenv("GITLAB_DEFAULT_GROUP")
+    )
 
     azure_openai_endpoint: Optional[str] = field(
         default_factory=lambda: os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -117,6 +131,30 @@ class AgentConfig:
     def get_repo_full_name(self, repo: str) -> str:
         """Get full repository name (org/repo)."""
         return f"{self.organization}/{repo}"
+
+    def get_gitlab_project_path(self, project: str) -> str:
+        """
+        Get full GitLab project path (group/project).
+
+        If gitlab_default_group is set, uses it as the group prefix.
+        Otherwise, returns the project name as-is (assuming full path provided).
+
+        Args:
+            project: Project name or full path
+
+        Returns:
+            Full project path for GitLab API
+        """
+        if "/" in project:
+            # Already a full path (e.g., "osdu/partition")
+            return project
+
+        if self.gitlab_default_group:
+            # Use default group (e.g., "osdu/partition")
+            return f"{self.gitlab_default_group}/{project}"
+
+        # No group specified, return project name as-is
+        return project
 
     def __post_init__(self) -> None:
         """Post-initialization validation."""

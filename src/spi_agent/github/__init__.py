@@ -14,6 +14,7 @@ from spi_agent.github.base import GitHubToolsBase
 from spi_agent.github.code_scanning import CodeScanningTools
 from spi_agent.github.issues import IssueTools
 from spi_agent.github.pull_requests import PullRequestTools
+from spi_agent.github.variables import RepositoryVariableTools
 from spi_agent.github.workflows import WorkflowTools
 
 
@@ -44,6 +45,7 @@ class GitHubTools:
         self._pull_requests = PullRequestTools(config)
         self._workflows = WorkflowTools(config)
         self._code_scanning = CodeScanningTools(config)
+        self._variables = RepositoryVariableTools(config)
 
     @property
     def github(self):
@@ -158,9 +160,19 @@ class GitHubTools:
         """Get detailed information about a specific code scanning alert."""
         return self._code_scanning.get_code_scanning_alert(*args, **kwargs)
 
+    # ============ REPOSITORY VARIABLES ============
+
+    def get_repository_variables(self, *args, **kwargs):
+        """List all GitHub Actions variables for a repository."""
+        return self._variables.get_repository_variables(*args, **kwargs)
+
+    def get_repository_variable(self, *args, **kwargs):
+        """Get a specific GitHub Actions variable value from a repository."""
+        return self._variables.get_repository_variable(*args, **kwargs)
+
     def close(self) -> None:
         """Close GitHub connections for all tool instances."""
-        for tools in [self._issues, self._pull_requests, self._workflows, self._code_scanning]:
+        for tools in [self._issues, self._pull_requests, self._workflows, self._code_scanning, self._variables]:
             if hasattr(tools, 'github') and tools.github:
                 tools.github.close()
 
@@ -176,11 +188,12 @@ def create_github_tools(config: AgentConfig) -> List:
         config: Agent configuration containing GitHub token and org info
 
     Returns:
-        List of 23 bound tool methods organized by domain:
+        List of 25 bound tool methods organized by domain:
         - Issues (8 tools): list, get, get_comments, create, update, add_comment, search, assign_to_copilot
         - Pull Requests (7 tools): list, get, get_comments, create, update, merge, add_comment
         - Workflows/Actions (6 tools): list, list_runs, get_run, trigger, cancel_run, check_pr_approvals
         - Code Scanning (2 tools): list_alerts, get_alert
+        - Repository Variables (2 tools): get_repository_variables, get_repository_variable
     """
     # Create specialized tool instances
     # Using separate instances (not via GitHubTools wrapper) preserves method signatures
@@ -188,6 +201,7 @@ def create_github_tools(config: AgentConfig) -> List:
     pull_requests = PullRequestTools(config)
     workflows = WorkflowTools(config)
     code_scanning = CodeScanningTools(config)
+    variables = RepositoryVariableTools(config)
 
     # Return bound methods directly from specialized tool classes
     # This preserves type annotations that were lost when accessing via GitHubTools wrapper
@@ -219,6 +233,9 @@ def create_github_tools(config: AgentConfig) -> List:
         # Code Scanning (2 tools)
         code_scanning.list_code_scanning_alerts,
         code_scanning.get_code_scanning_alert,
+        # Repository Variables (2 tools)
+        variables.get_repository_variables,
+        variables.get_repository_variable,
     ]
 
 
@@ -233,4 +250,5 @@ __all__ = [
     "PullRequestTools",
     "WorkflowTools",
     "CodeScanningTools",
+    "RepositoryVariableTools",
 ]

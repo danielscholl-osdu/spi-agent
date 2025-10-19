@@ -1,19 +1,28 @@
 # SPI Agent
 
-AI-powered GitHub management for OSDU SPI services. Chat with your repositories using natural language.
+AI-powered GitHub & GitLab management for OSDU SPI services. Chat with your repositories using natural language.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-SPI Agent provides a conversational interface for managing GitHub **Issues**, **Pull Requests**, **Workflows**, and **Code Scanning** across OSDU SPI service repositories. With Maven MCP integration, gain powerful **dependency management** and **security scanning** capabilities. Perform comprehensive GitHub and Maven operations without leaving your terminal.
+SPI Agent provides a conversational interface for managing **GitHub** and **GitLab** repositories across OSDU SPI services. Manage Issues, Pull/Merge Requests, Workflows/Pipelines, Code Scanning, and more. With Maven MCP integration, gain powerful **dependency management** and **security scanning** capabilities. Perform comprehensive multi-platform repository operations without leaving your terminal.
 
-**28+ Tools Available:**
+**48+ Tools Available** (when both platforms configured):
+
+**GitHub:**
 - 🐛 **Issues**: List, read, create, update, comment, search, **assign to Copilot**
 - 🔀 **Pull Requests**: List, read, create, update, merge, comment
 - ⚙️ **Workflows**: List, monitor runs, trigger, cancel, **detect approval required**
 - 🔒 **Code Scanning**: List security alerts, get vulnerability details
+
+**GitLab** (optional):
+- 🐛 **Issues**: List, read, create, update, add notes, search
+- 🔀 **Merge Requests**: List, read, create, update, merge, add notes
+- ⚙️ **Pipelines**: List, monitor, trigger, cancel, retry, get jobs
+
+**Common:**
 - 📁 **File System**: List files, read contents, search patterns, parse POMs, find dependency versions
 - 📦 **Maven Dependencies** (optional): Version checks, vulnerability scanning, triage analysis
 
@@ -116,6 +125,9 @@ The agent requires environment variables for Azure OpenAI access. Configure thes
 |----------|---------|-------------|
 | `SPI_AGENT_ORGANIZATION` | `danielscholl-osdu` | GitHub organization to manage |
 | `SPI_AGENT_REPOSITORIES` | `partition,legal,entitlements,schema,file,storage` | Comma-separated repository list |
+| `GITLAB_URL` | `https://gitlab.com` | GitLab instance URL (for self-hosted instances) |
+| `GITLAB_TOKEN` | *(none)* | GitLab personal access token (enables GitLab integration) |
+| `GITLAB_DEFAULT_GROUP` | *(none)* | Default GitLab group/namespace for projects |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | *(none)* | Azure Application Insights for observability |
 | `MAVEN_MCP_VERSION` | `mvn-mcp-server==2.3.0` | Override Maven MCP Server version |
 | `SPI_AGENT_HOSTED_TOOLS_ENABLED` | `false` | Enable Microsoft Agent Framework hosted tools |
@@ -154,6 +166,36 @@ For command-line options:
 ```bash
 spi-agent --help
 ```
+
+### GitLab Status Command
+
+Get comprehensive status for GitLab repositories with provider-based filtering:
+
+```bash
+# Check single project with default providers (Azure,Core)
+spi-agent status-glab --projects partition
+
+# Check multiple projects with Azure provider only
+spi-agent status-glab --projects partition,legal --provider Azure
+
+# Check all projects with both Azure and Core providers
+spi-agent status-glab --projects all --provider Azure,Core
+
+# Check single project with custom provider
+spi-agent status-glab --projects storage --provider GCP
+```
+
+**What It Shows:**
+- Project Information: GitLab project exists, URL, last updated
+- Open Issues: Filtered by provider labels (azure, core, etc.)
+- Merge Requests: Filtered by provider labels, showing draft status
+- Pipeline Runs: Recent CI/CD pipeline status (success, failed, running)
+- Next Steps: Actionable items for failed pipelines, open MRs
+
+**Provider Filtering:**
+Provider filtering uses GitLab labels on issues and merge requests. When multiple providers are specified (e.g., `Azure,Core`), items with ANY of those labels are shown.
+
+**Note:** GitLab labels are case-sensitive. Use capitalized names: `Azure`, `Core`, `GCP`, `AWS`
 
 
 ## Development & Testing
