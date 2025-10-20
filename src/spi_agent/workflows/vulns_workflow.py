@@ -264,35 +264,46 @@ async def run_test_workflow(
     return result
 
 
-async def run_fork_workflow(services: List[str], branch: str = "main") -> WorkflowResult:
+async def run_fork_workflow(services: List[str], branch: str = "main", use_copilot: bool = False) -> WorkflowResult:
     """Run fork workflow for specified services.
 
-    This is a placeholder for future MAF Workflow migration of ForkRunner (CopilotRunner).
+    Uses direct API mode by default for fast, reliable execution.
+    Can optionally use Copilot CLI for AI-driven execution.
 
     Args:
         services: List of service names to fork
         branch: Branch to fork
+        use_copilot: If True, use Copilot CLI instead of direct API (default: False)
 
     Returns:
         WorkflowResult with fork operation status
     """
     workflow_start = datetime.now()
 
-    logger.info(f"Fork workflow for services: {', '.join(services)} (branch: {branch})")
+    logger.info(f"Fork workflow for services: {', '.join(services)} (branch: {branch}, mode: {'copilot' if use_copilot else 'direct'})")
 
-    # Placeholder: delegate to existing CopilotRunner
     from spi_agent.copilot import get_prompt_file
     from spi_agent.copilot.runners.copilot_runner import CopilotRunner
 
     prompt_file = get_prompt_file("fork.md")
     runner = CopilotRunner(prompt_file=prompt_file, services=services, branch=branch)
-    exit_code = runner.run()
 
-    # Extract fork status
+    # Use direct API mode by default (fast), or Copilot CLI if requested
+    if use_copilot:
+        exit_code = runner.run()
+    else:
+        exit_code = await runner.run_direct()
+
+    # Extract fork status from tracker
     fork_status_by_service: Dict[str, str] = {}
     for service in services:
-        # Fork status is typically success/error
-        fork_status_by_service[service] = "success" if exit_code == 0 else "error"
+        status = runner.tracker.services[service]["status"]
+        if status == "success":
+            fork_status_by_service[service] = "success"
+        elif status == "skipped":
+            fork_status_by_service[service] = "skipped"
+        else:
+            fork_status_by_service[service] = "error"
 
     summary = f"Forked {len(services)} service(s) (branch: {branch})"
 
@@ -302,7 +313,7 @@ async def run_fork_workflow(services: List[str], branch: str = "main") -> Workfl
         services=services,
         status="success" if exit_code == 0 else "error",
         summary=summary,
-        detailed_results={"exit_code": exit_code, "branch": branch},
+        detailed_results={"exit_code": exit_code, "branch": branch, "mode": "copilot" if use_copilot else "direct"},
         fork_status=fork_status_by_service,
     )
 

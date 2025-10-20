@@ -1,5 +1,6 @@
 """Copilot fork runner for repository initialization."""
 
+import logging
 import re
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -11,6 +12,8 @@ from spi_agent.copilot.base import BaseRunner
 from spi_agent.copilot.base.runner import console
 from spi_agent.copilot.config import config
 from spi_agent.copilot.trackers import ServiceTracker
+
+logger = logging.getLogger(__name__)
 
 
 class CopilotRunner(BaseRunner):
@@ -223,6 +226,75 @@ class CopilotRunner(BaseRunner):
                 # Permission/access errors
                 elif "permission denied" in line_lower or "could not request permission" in line_lower:
                     self.tracker.update(service, "error", "Permission denied")
+
+    async def run_direct(self) -> int:
+        """Execute direct API fork operations for fast execution."""
+        from spi_agent.config import AgentConfig
+        from spi_agent.github.fork_client import ForkDirectClient
+        from rich.live import Live
+
+        self.show_config()
+        console.print("[bold blue]Using direct API mode (fast)...[/bold blue]\n")
+
+        # Create fork client
+        agent_config = AgentConfig()
+        fork_client = ForkDirectClient(agent_config)
+
+        # Create layout for live updates
+        layout = self.create_layout()
+        layout["status"].update(self.tracker.get_table())
+
+        try:
+            with Live(layout, console=console, refresh_per_second=4) as live:
+                # Process each service
+                for service in self.services:
+                    self.tracker.update(service, "running", "Initializing fork...")
+                    layout["status"].update(self.tracker.get_table())
+
+                    # Fork the service
+                    result = await fork_client.fork_service(service, self.branch)
+
+                    # Update output panel with result
+                    self.output_lines.append(f"{'='*60}")
+                    self.output_lines.append(f"Service: {service}")
+                    self.output_lines.append(f"Status: {result['status']}")
+                    self.output_lines.append(f"Message: {result['message']}")
+                    if "repo_url" in result:
+                        self.output_lines.append(f"URL: {result['repo_url']}")
+                    self.output_lines.append(f"{'='*60}")
+                    layout["output"].update(self._output_panel_renderable)
+
+                    # Update tracker based on result
+                    if result["status"] == "success":
+                        self.tracker.update(
+                            service, "success", "Completed successfully"
+                        )
+                    elif result["status"] == "skipped":
+                        self.tracker.update(service, "skipped", result["message"])
+                    else:
+                        self.tracker.update(service, "error", result["message"])
+
+                    layout["status"].update(self.tracker.get_table())
+
+            # Post-processing outside Live context
+            console.print()
+
+            # Check if all succeeded or skipped
+            all_ok = all(
+                self.tracker.services[s]["status"] in ["success", "skipped"]
+                for s in self.services
+            )
+            return_code = 0 if all_ok else 1
+
+            # Print the final results panel
+            console.print(self.get_results_panel(return_code))
+
+            return return_code
+
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}", style="bold red")
+            logger.error(f"Direct fork error: {e}", exc_info=True)
+            return 1
 
     def get_results_panel(self, return_code: int) -> Panel:
         """Generate final results panel with clean table layout"""
