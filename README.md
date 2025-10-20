@@ -105,7 +105,7 @@ Install `spi-agent` globally using `uv`:
 uv tool install --prerelease=allow git+https://github.com/danielscholl-osdu/spi-agent.git
 
 # Upgrade to latest version
-uv tool upgrade spi-agent
+uv tool upgrade spi
 ```
 
 The agent requires environment variables for Azure OpenAI access. Configure these in your system's environment:
@@ -155,7 +155,7 @@ setx AZURE_OPENAI_API_KEY "your_api_key"
 Start the interactive chat interface:
 
 ```bash
-spi-agent
+spi
 ```
 
 The agent provides conversational access to GitHub operations and Maven dependency management. Use natural language to manage issues, pull requests, workflows, and security scanning across your OSDU SPI repositories.
@@ -164,7 +164,7 @@ The agent provides conversational access to GitHub operations and Maven dependen
 
 For command-line options:
 ```bash
-spi-agent --help
+spi --help
 ```
 
 ### GitLab Status Command
@@ -173,16 +173,16 @@ Get comprehensive status for GitLab repositories with provider-based filtering:
 
 ```bash
 # Check single project with default providers (Azure,Core)
-spi-agent status --service partition --platform gitlab
+spi status --service partition --platform gitlab
 
 # Check multiple projects with Azure provider only
-spi-agent status --service partition,legal --platform gitlab --provider Azure
+spi status --service partition,legal --platform gitlab --provider Azure
 
 # Check all projects with both Azure and Core providers
-spi-agent status --service all --platform gitlab --provider Azure,Core
+spi status --service all --platform gitlab --provider Azure,Core
 
 # Check single project with custom provider
-spi-agent status --service storage --platform gitlab --provider GCP
+spi status --service storage --platform gitlab --provider GCP
 ```
 
 **What It Shows:**

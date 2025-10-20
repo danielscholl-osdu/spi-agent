@@ -45,7 +45,7 @@ dev = [
 ]
 
 [project.scripts]
-spi-agent = "spi_agent.cli:main"
+spi = "spi_agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

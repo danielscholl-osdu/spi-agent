@@ -483,13 +483,13 @@ Commands:
   vulns               Run dependency/vulnerability analysis (requires copilot)
 
 Examples:
-  spi-agent                                    # Interactive chat
-  spi-agent -p "List issues in partition"      # One-shot query
-  spi-agent fork --service partition          # Fork repos
-  spi-agent status --service partition        # Check GitHub status (default)
-  spi-agent status --service partition --platform gitlab  # Check GitLab status
-  spi-agent test --service partition          # Run Maven tests
-  spi-agent vulns --service partition         # Run vulnerability analysis
+  spi                                    # Interactive chat
+  spi -p "List issues in partition"      # One-shot query
+  spi fork --service partition          # Fork repos
+  spi status --service partition        # Check GitHub status (default)
+  spi status --service partition --platform gitlab  # Check GitLab status
+  spi test --service partition          # Run Maven tests
+  spi vulns --service partition         # Run vulnerability analysis
         """,
     )
 
