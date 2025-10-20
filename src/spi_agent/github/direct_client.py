@@ -167,7 +167,11 @@ class GitHubDirectClient:
             }
 
         except GithubException as e:
-            logger.warning(f"Error fetching issues for {repo_name}: {e}")
+            # Don't warn for 404s (repo doesn't exist) - expected condition
+            if e.status == 404:
+                logger.debug(f"Repository {repo_name} not found")
+            else:
+                logger.warning(f"Error fetching issues for {repo_name}: {e}")
             return {"count": 0, "items": []}
 
     async def _get_pull_requests(self, repo_name: str) -> Dict[str, Any]:
@@ -194,7 +198,11 @@ class GitHubDirectClient:
             }
 
         except GithubException as e:
-            logger.warning(f"Error fetching PRs for {repo_name}: {e}")
+            # Don't warn for 404s (repo doesn't exist) - expected condition
+            if e.status == 404:
+                logger.debug(f"Repository {repo_name} not found")
+            else:
+                logger.warning(f"Error fetching PRs for {repo_name}: {e}")
             return {"count": 0, "items": []}
 
     async def _get_workflow_runs(self, repo_name: str) -> Dict[str, Any]:
@@ -220,7 +228,11 @@ class GitHubDirectClient:
             }
 
         except GithubException as e:
-            logger.warning(f"Error fetching workflow runs for {repo_name}: {e}")
+            # Don't warn for 404s (repo doesn't exist) - expected condition
+            if e.status == 404:
+                logger.debug(f"Repository {repo_name} not found")
+            else:
+                logger.warning(f"Error fetching workflow runs for {repo_name}: {e}")
             return {"recent": []}
 
     def _format_issue(self, issue: Any) -> Dict[str, Any]:

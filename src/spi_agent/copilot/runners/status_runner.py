@@ -633,6 +633,18 @@ class StatusRunner(BaseRunner):
         # Next Steps / Quick Actions
         next_steps = []
 
+        # Check for non-existent repositories (GitHub only)
+        missing_repos = []
+        if not is_gitlab:
+            for service_name, service_data in services_data.items():
+                repo_or_project = service_data.get("repo", {})
+                if not repo_or_project.get("exists", False):
+                    missing_repos.append(service_name)
+
+        if missing_repos:
+            next_steps.append(f"[yellow]⚠[/yellow] {len(missing_repos)} service(s) not found: {', '.join(missing_repos)}")
+            next_steps.append(f"  💡 Run: /fork {','.join(missing_repos)} to initialize")
+
         # Check for human-required issues
         human_required = [
             (title, data) for title, data in issue_groups.items()
@@ -721,7 +733,7 @@ class StatusRunner(BaseRunner):
             )
             if total_running > 0:
                 next_steps.append(f"[yellow]▶[/yellow] {total_running} workflow(s) still running")
-            elif not approval_needed:
+            elif not approval_needed and not missing_repos:
                 next_steps.append("[green]✓[/green] All workflows completed")
 
         # Only show Next Steps for GitHub (not useful for GitLab - jobs table is clearer)
