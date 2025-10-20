@@ -177,23 +177,54 @@ class GitHubTools:
                 tools.github.close()
 
 
+def _prefix_tool_name(tool, prefix: str = "gh_"):
+    """
+    Wrap a tool method with a prefixed name for clarity.
+
+    This makes it explicit which platform each tool belongs to and prevents
+    naming conflicts with GitLab tools.
+
+    Args:
+        tool: Bound method to wrap
+        prefix: Prefix to add to tool name (default: "gh_")
+
+    Returns:
+        Wrapped tool with prefixed __name__
+    """
+    import functools
+
+    # Create a wrapper that preserves the original functionality
+    @functools.wraps(tool)
+    def wrapper(*args, **kwargs):
+        return tool(*args, **kwargs)
+
+    # Override __name__ with prefix while preserving other attributes via functools.wraps
+    wrapper.__name__ = f"{prefix}{tool.__name__}"
+
+    # Preserve __qualname__ if it exists (for better introspection)
+    if hasattr(tool, '__qualname__'):
+        wrapper.__qualname__ = f"{prefix}{tool.__qualname__}"
+
+    return wrapper
+
+
 def create_github_tools(config: AgentConfig) -> List:
     """
     Create GitHub tool functions for the agent.
 
     This function creates specialized tool class instances and returns their
-    bound methods, which preserve type annotations for proper agent framework integration.
+    bound methods with 'gh_' prefix for clarity and to prevent naming conflicts.
 
     Args:
         config: Agent configuration containing GitHub token and org info
 
     Returns:
-        List of 25 bound tool methods organized by domain:
-        - Issues (8 tools): list, get, get_comments, create, update, add_comment, search, assign_to_copilot
-        - Pull Requests (7 tools): list, get, get_comments, create, update, merge, add_comment
-        - Workflows/Actions (6 tools): list, list_runs, get_run, trigger, cancel_run, check_pr_approvals
-        - Code Scanning (2 tools): list_alerts, get_alert
-        - Repository Variables (2 tools): get_repository_variables, get_repository_variable
+        List of 25 bound tool methods with 'gh_' prefix organized by domain:
+        - Issues (8 tools): gh_list_issues, gh_get_issue, gh_create_issue, etc.
+        - Pull Requests (7 tools): gh_list_pull_requests, gh_get_pull_request, etc.
+        - Workflows/Actions (6 tools): gh_list_workflows, gh_trigger_workflow, etc.
+        - Code Scanning (2 tools): gh_list_code_scanning_alerts, gh_get_code_scanning_alert
+        - Repository Variables (2 tools): gh_get_repository_variables, gh_get_repository_variable
     """
     # Create specialized tool instances
     # Using separate instances (not via GitHubTools wrapper) preserves method signatures
@@ -203,39 +234,39 @@ def create_github_tools(config: AgentConfig) -> List:
     code_scanning = CodeScanningTools(config)
     variables = RepositoryVariableTools(config)
 
-    # Return bound methods directly from specialized tool classes
-    # This preserves type annotations that were lost when accessing via GitHubTools wrapper
+    # Return bound methods with gh_ prefix for clarity
+    # This makes it explicit which platform each tool belongs to
     return [
         # Issues (8 tools)
-        issues.list_issues,
-        issues.get_issue_comments,
-        issues.get_issue,
-        issues.create_issue,
-        issues.update_issue,
-        issues.add_issue_comment,
-        issues.search_issues,
-        issues.assign_issue_to_copilot,
+        _prefix_tool_name(issues.list_issues),
+        _prefix_tool_name(issues.get_issue_comments),
+        _prefix_tool_name(issues.get_issue),
+        _prefix_tool_name(issues.create_issue),
+        _prefix_tool_name(issues.update_issue),
+        _prefix_tool_name(issues.add_issue_comment),
+        _prefix_tool_name(issues.search_issues),
+        _prefix_tool_name(issues.assign_issue_to_copilot),
         # Pull Requests (7 tools)
-        pull_requests.list_pull_requests,
-        pull_requests.get_pull_request,
-        pull_requests.get_pr_comments,
-        pull_requests.create_pull_request,
-        pull_requests.update_pull_request,
-        pull_requests.merge_pull_request,
-        pull_requests.add_pr_comment,
+        _prefix_tool_name(pull_requests.list_pull_requests),
+        _prefix_tool_name(pull_requests.get_pull_request),
+        _prefix_tool_name(pull_requests.get_pr_comments),
+        _prefix_tool_name(pull_requests.create_pull_request),
+        _prefix_tool_name(pull_requests.update_pull_request),
+        _prefix_tool_name(pull_requests.merge_pull_request),
+        _prefix_tool_name(pull_requests.add_pr_comment),
         # Workflows/Actions (6 tools)
-        workflows.list_workflows,
-        workflows.list_workflow_runs,
-        workflows.get_workflow_run,
-        workflows.trigger_workflow,
-        workflows.cancel_workflow_run,
-        workflows.check_pr_workflow_approvals,
+        _prefix_tool_name(workflows.list_workflows),
+        _prefix_tool_name(workflows.list_workflow_runs),
+        _prefix_tool_name(workflows.get_workflow_run),
+        _prefix_tool_name(workflows.trigger_workflow),
+        _prefix_tool_name(workflows.cancel_workflow_run),
+        _prefix_tool_name(workflows.check_pr_workflow_approvals),
         # Code Scanning (2 tools)
-        code_scanning.list_code_scanning_alerts,
-        code_scanning.get_code_scanning_alert,
+        _prefix_tool_name(code_scanning.list_code_scanning_alerts),
+        _prefix_tool_name(code_scanning.get_code_scanning_alert),
         # Repository Variables (2 tools)
-        variables.get_repository_variables,
-        variables.get_repository_variable,
+        _prefix_tool_name(variables.get_repository_variables),
+        _prefix_tool_name(variables.get_repository_variable),
     ]
 
 

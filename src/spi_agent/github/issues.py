@@ -303,9 +303,19 @@ class IssueTools(GitHubToolsBase):
         except GithubException as e:
             if e.status == 404:
                 return f"Issue #{issue_number} not found in {repo}"
-            return f"GitHub API error: {e.data.get('message', str(e))}"
+            # Enhanced error reporting with status code and details
+            error_msg = e.data.get('message', str(e)) if hasattr(e, 'data') else str(e)
+            return (
+                f"GitHub API error (status {e.status}): {error_msg}\n"
+                f"Issue: #{issue_number} in {repo_full_name}\n"
+                f"Attempted update: {', '.join(update_params.keys()) if update_params else 'none'}"
+            )
         except Exception as e:
-            return f"Error updating issue: {str(e)}"
+            return (
+                f"Error updating issue: {str(e)}\n"
+                f"Issue: #{issue_number} in {repo_full_name}\n"
+                f"Type: {type(e).__name__}"
+            )
 
     def add_issue_comment(
         self,

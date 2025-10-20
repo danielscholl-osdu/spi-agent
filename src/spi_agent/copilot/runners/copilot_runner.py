@@ -240,10 +240,16 @@ class CopilotRunner(BaseRunner):
         agent_config = AgentConfig()
         fork_client = ForkDirectClient(agent_config)
 
-        # Create status callback to update tracker
+        # Create Live display reference (will be assigned in context manager)
+        live_display = None
+
+        # Create status callback to update tracker AND live display
         def status_callback(service: str, status: str, details: str):
             """Callback for fork_client to update service status."""
             self.tracker.update(service, status, details)
+            # Update live display with fresh table
+            if live_display is not None:
+                live_display.update(self.tracker.get_table())
 
         async def fork_service_with_updates(service: str):
             """Fork a single service with live status updates."""
@@ -261,12 +267,19 @@ class CopilotRunner(BaseRunner):
                 else:
                     self.tracker.update(service, "error", result["message"])
 
+                # Update live display after final status
+                if live_display is not None:
+                    live_display.update(self.tracker.get_table())
+
                 return result
 
             except Exception as e:
                 error_msg = f"Exception: {str(e)}"
                 logger.error(f"Error forking {service}: {e}", exc_info=True)
                 self.tracker.update(service, "error", error_msg)
+                # Update live display on error
+                if live_display is not None:
+                    live_display.update(self.tracker.get_table())
                 return {
                     "service": service,
                     "status": "error",
@@ -276,6 +289,9 @@ class CopilotRunner(BaseRunner):
         try:
             # Display only the status table (no split layout)
             with Live(self.tracker.get_table(), console=console, refresh_per_second=4) as live:
+                # Assign to nonlocal variable so callback can access it
+                live_display = live
+
                 # Process all services in parallel
                 tasks = [fork_service_with_updates(service) for service in self.services]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
