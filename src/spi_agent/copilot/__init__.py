@@ -52,7 +52,7 @@ from spi_agent.copilot.models import (
 from spi_agent.copilot.trackers import ServiceTracker, StatusTracker, TestTracker, VulnsTracker
 
 # Import runners
-from spi_agent.copilot.runners import CopilotRunner, StatusRunner, TestRunner, VulnsRunner
+from spi_agent.copilot.runners import CopilotRunner, StatusRunner, VulnsRunner
 
 
 __all__ = [
@@ -60,7 +60,6 @@ __all__ = [
     "CopilotConfig",
     "CopilotRunner",
     "StatusRunner",
-    "TestRunner",
     "VulnsRunner",
     "TestTracker",
     "VulnsTracker",
@@ -226,15 +225,6 @@ Information gathered (GitLab):
 
     # Handle fork command
     if args.command == "fork":
-        try:
-            prompt_file = get_prompt_file("fork.md")
-        except FileNotFoundError as exc:
-            console.print(
-                f"[red]Error:[/red] {exc}",
-                style="bold red",
-            )
-            return 1
-
         # Parse services
         services = parse_services(args.services)
 
@@ -248,9 +238,10 @@ Information gathered (GitLab):
             console.print(f"\n[cyan]Available services:[/cyan] {', '.join(SERVICES.keys())}")
             return 1
 
-        # Run copilot
-        runner = CopilotRunner(prompt_file, services, args.branch)
-        return runner.run()
+        # Run fork using direct API mode
+        import asyncio
+        runner = CopilotRunner(services, args.branch)
+        return asyncio.run(runner.run_direct())
 
     # Handle status command
     if args.command == "status":

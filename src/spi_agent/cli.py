@@ -70,10 +70,8 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             if branch_idx + 1 < len(parts):
                 branch = parts[branch_idx + 1]
 
-        try:
-            prompt_file = copilot_module.get_prompt_file("fork.md")
-        except FileNotFoundError as exc:  # pragma: no cover - packaging guard
-            return f"Error: {exc}"
+        if not COPILOT_AVAILABLE or copilot_module is None:
+            return "Error: Copilot module not available for service validation"
 
         services = copilot_module.parse_services(services_arg)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
@@ -161,10 +159,8 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             if provider_idx + 1 < len(parts):
                 provider = parts[provider_idx + 1]
 
-        try:
-            prompt_file = copilot_module.get_prompt_file("test.md")
-        except FileNotFoundError as exc:  # pragma: no cover - packaging guard
-            return f"Error: {exc}"
+        if not COPILOT_AVAILABLE or copilot_module is None:
+            return "Error: Copilot module not available for service validation"
 
         services = copilot_module.parse_services(services_arg)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
@@ -616,20 +612,14 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        try:
-            prompt_file = copilot_module.get_prompt_file("fork.md")
-        except FileNotFoundError as exc:
-            console.print(f"[red]Error:[/red] {exc}", style="bold red")
-            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
-            return 1
-
         services = copilot_module.parse_services(parsed.service)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
             return 1
 
-        runner = copilot_module.CopilotRunner(prompt_file, services, parsed.branch)
+        # Use CopilotRunner with direct API mode (fast, no AI)
+        runner = copilot_module.CopilotRunner(services, parsed.branch)
         return await runner.run_direct()
 
     if parsed.command == "status":
@@ -664,25 +654,20 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        try:
-            prompt_file = copilot_module.get_prompt_file("test.md")
-        except FileNotFoundError as exc:
-            console.print(f"[red]Error:[/red] {exc}", style="bold red")
-            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
-            return 1
-
         services = copilot_module.parse_services(parsed.service)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
             return 1
 
-        runner = copilot_module.TestRunner(
-            prompt_file,
-            services,
-            parsed.provider,
+        # Use DirectTestRunner for fast, reliable test execution
+        from spi_agent.copilot.runners.direct_test_runner import DirectTestRunner
+
+        runner = DirectTestRunner(
+            services=services,
+            provider=parsed.provider,
         )
-        return runner.run()
+        return await runner.run()
 
     if parsed.command == "vulns":
         if not COPILOT_AVAILABLE:

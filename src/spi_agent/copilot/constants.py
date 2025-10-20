@@ -1,6 +1,6 @@
 """Constants for OSDU SPI services."""
 
-# Service definitions matching fork.md
+# Service definitions for OSDU SPI platform
 SERVICES = {
     "partition": "Partition Service",
     "entitlements": "Entitlements Service",

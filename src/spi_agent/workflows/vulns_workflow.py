@@ -204,7 +204,7 @@ async def run_test_workflow(
 ) -> WorkflowResult:
     """Run test workflow for specified services.
 
-    This is a placeholder for future MAF Workflow migration of TestRunner.
+    Uses DirectTestRunner for fast, reliable test execution with parallel processing.
 
     Args:
         services: List of service names to test
@@ -214,85 +214,125 @@ async def run_test_workflow(
         WorkflowResult with test execution data
     """
     workflow_start = datetime.now()
+    start_time = asyncio.get_event_loop().time()
 
     logger.info(f"Test workflow for services: {', '.join(services)} (provider: {provider})")
 
-    # Placeholder: delegate to existing TestRunner
-    # Future: implement as MAF Workflow with Executors
-    from spi_agent.copilot import get_prompt_file
-    from spi_agent.copilot.runners.test_runner import TestRunner
+    with tracer.start_as_current_span("test_workflow") as span:
+        span.set_attribute("services", ",".join(services))
+        span.set_attribute("provider", provider)
 
-    prompt_file = get_prompt_file("test.md")
-    runner = TestRunner(prompt_file=prompt_file, services=services, provider=provider)
-    exit_code = runner.run()
+        try:
+            # Use DirectTestRunner for fast, reliable execution
+            from spi_agent.copilot.runners.direct_test_runner import DirectTestRunner
 
-    # Extract test results including grade
-    test_results_by_service: Dict[str, Dict[str, Any]] = {}
-    for service in services:
-        service_data = runner.tracker.services.get(service, {})
-        test_results_by_service[service] = {
-            "passed": service_data.get("tests_run", 0) - service_data.get("tests_failed", 0),
-            "failed": service_data.get("tests_failed", 0),
-            "skipped": 0,  # Not tracked separately
-            "total_tests": service_data.get("tests_run", 0),
-            "coverage_line": service_data.get("coverage_line", 0),
-            "coverage_branch": service_data.get("coverage_branch", 0),
-            "quality_grade": service_data.get("quality_grade"),
-            "quality_label": service_data.get("quality_label"),
-        }
+            runner = DirectTestRunner(services=services, provider=provider)
+            exit_code = await runner.run()
 
-    total_passed = sum(v.get("passed", 0) for v in test_results_by_service.values())
-    total_failed = sum(v.get("failed", 0) for v in test_results_by_service.values())
+            # Extract test results including grade
+            test_results_by_service: Dict[str, Dict[str, Any]] = {}
+            for service in services:
+                service_data = runner.tracker.services.get(service, {})
+                test_results_by_service[service] = {
+                    "passed": service_data.get("tests_run", 0) - service_data.get("tests_failed", 0),
+                    "failed": service_data.get("tests_failed", 0),
+                    "skipped": 0,  # Not tracked separately
+                    "total_tests": service_data.get("tests_run", 0),
+                    "coverage_line": service_data.get("coverage_line", 0),
+                    "coverage_branch": service_data.get("coverage_branch", 0),
+                    "quality_grade": service_data.get("quality_grade"),
+                    "quality_label": service_data.get("quality_label"),
+                }
 
-    summary = f"Tested {len(services)} service(s): {total_passed} passed, {total_failed} failed"
+            total_passed = sum(v.get("passed", 0) for v in test_results_by_service.values())
+            total_failed = sum(v.get("failed", 0) for v in test_results_by_service.values())
 
-    result = WorkflowResult(
-        workflow_type="test",
-        timestamp=workflow_start,
-        services=services,
-        status="success" if exit_code == 0 else "error",
-        summary=summary,
-        detailed_results={"exit_code": exit_code, "provider": provider},
-        test_results=test_results_by_service,
-    )
+            summary = f"Tested {len(services)} service(s): {total_passed} passed, {total_failed} failed"
 
-    # Store result
-    result_store = get_result_store()
-    await result_store.store(result)
-    logger.info(f"Stored test workflow result: {summary}")
+            result = WorkflowResult(
+                workflow_type="test",
+                timestamp=workflow_start,
+                services=services,
+                status="success" if exit_code == 0 else "error",
+                summary=summary,
+                detailed_results={"exit_code": exit_code, "provider": provider},
+                test_results=test_results_by_service,
+            )
 
-    return result
+            # Store result
+            result_store = get_result_store()
+            await result_store.store(result)
+            logger.info(f"Stored test workflow result: {summary}")
+
+            # Record workflow metrics
+            duration = asyncio.get_event_loop().time() - start_time
+            record_workflow_run(
+                workflow_type="test",
+                duration=duration,
+                status="success" if exit_code == 0 else "error",
+                service_count=len(services),
+            )
+
+            span.set_attribute("total_tests", total_passed + total_failed)
+            span.set_attribute("status", "success" if exit_code == 0 else "error")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Test workflow failed: {e}")
+            span.set_attribute("error", True)
+            span.set_attribute("error.message", str(e))
+
+            # Create error result
+            result = WorkflowResult(
+                workflow_type="test",
+                timestamp=workflow_start,
+                services=services,
+                status="error",
+                summary=f"Test workflow failed: {str(e)[:100]}",
+                detailed_results={"error": str(e), "provider": provider},
+                test_results={},
+            )
+
+            # Store error result
+            result_store = get_result_store()
+            await result_store.store(result)
+
+            # Record failed workflow
+            duration = asyncio.get_event_loop().time() - start_time
+            record_workflow_run(
+                workflow_type="test",
+                duration=duration,
+                status="error",
+                service_count=len(services),
+            )
+
+            raise
 
 
 async def run_fork_workflow(services: List[str], branch: str = "main", use_copilot: bool = False) -> WorkflowResult:
     """Run fork workflow for specified services.
 
-    Uses direct API mode by default for fast, reliable execution.
-    Can optionally use Copilot CLI for AI-driven execution.
+    Uses direct API mode for fast, reliable execution with parallel processing.
 
     Args:
         services: List of service names to fork
         branch: Branch to fork
-        use_copilot: If True, use Copilot CLI instead of direct API (default: False)
+        use_copilot: Deprecated parameter (ignored, direct API always used)
 
     Returns:
         WorkflowResult with fork operation status
     """
     workflow_start = datetime.now()
 
-    logger.info(f"Fork workflow for services: {', '.join(services)} (branch: {branch}, mode: {'copilot' if use_copilot else 'direct'})")
+    logger.info(f"Fork workflow for services: {', '.join(services)} (branch: {branch}, mode: direct)")
 
-    from spi_agent.copilot import get_prompt_file
     from spi_agent.copilot.runners.copilot_runner import CopilotRunner
 
-    prompt_file = get_prompt_file("fork.md")
-    runner = CopilotRunner(prompt_file=prompt_file, services=services, branch=branch)
+    runner = CopilotRunner(services=services, branch=branch)
 
-    # Use direct API mode by default (fast), or Copilot CLI if requested
-    if use_copilot:
-        exit_code = runner.run()
-    else:
-        exit_code = await runner.run_direct()
+    # Use direct API mode (fast, reliable)
+    exit_code = await runner.run_direct()
 
     # Extract fork status from tracker
     fork_status_by_service: Dict[str, str] = {}

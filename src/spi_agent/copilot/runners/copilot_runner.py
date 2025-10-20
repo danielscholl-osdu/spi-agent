@@ -18,15 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class CopilotRunner(BaseRunner):
-    """Runs Copilot CLI with enhanced output for fork operations"""
+    """Direct API client for forking and initializing repositories"""
 
     def __init__(
         self,
-        prompt_file: Union[Path, Traversable],
         services: List[str],
         branch: str = "main",
     ):
-        super().__init__(prompt_file, services)
+        # Pass dummy path since we don't use prompts in direct API mode
+        super().__init__(Path("/dev/null"), services)
         self.branch = branch
         self.tracker = ServiceTracker(services)
 
@@ -74,12 +74,12 @@ class CopilotRunner(BaseRunner):
 
     def show_config(self):
         """Display run configuration"""
-        config_text = f"""[cyan]Prompt:[/cyan]     {self.prompt_file.name}
-[cyan]Services:[/cyan]   {', '.join(self.services)}
+        config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
 [cyan]Branch:[/cyan]     {self.branch}
-[cyan]Template:[/cyan]   azure/osdu-spi"""
+[cyan]Template:[/cyan]   azure/osdu-spi
+[cyan]Mode:[/cyan]       Direct API"""
 
-        console.print(Panel(config_text, title="🤖 Copilot Automation", border_style="blue"))
+        console.print(Panel(config_text, title="🔱 Repository Fork", border_style="blue"))
         console.print()
 
     def parse_output(self, line: str) -> None:
