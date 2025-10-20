@@ -36,34 +36,8 @@ class DirectTestRunner:
         self.profiles = self._parse_provider_to_profiles(provider)
         self.tracker = TestTracker(services, provider, profiles=self.profiles if len(self.profiles) > 1 else [])
 
-        # Logging
-        self.log_file = self._get_log_file()
-        self.logger = self._setup_logger()
-
         # Track current module being built (for per-profile test count parsing)
         self.current_module = None
-
-    def _get_log_file(self) -> Path:
-        """Generate log file path with timestamp."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_dir = Path.cwd() / "logs"
-        log_dir.mkdir(exist_ok=True)
-        return log_dir / f"test_{timestamp}.log"
-
-    def _setup_logger(self) -> logging.Logger:
-        """Setup file-only logger for debugging."""
-        logger = logging.getLogger(f"{__name__}.{id(self)}")
-        logger.setLevel(logging.DEBUG)
-        logger.propagate = False
-
-        # File handler
-        file_handler = logging.FileHandler(self.log_file)
-        file_handler.setFormatter(
-            logging.Formatter('[%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s] %(message)s')
-        )
-        logger.addHandler(file_handler)
-
-        return logger
 
     def _parse_provider_to_profiles(self, provider: str) -> List[str]:
         """Parse provider string into list of profiles."""
@@ -128,7 +102,7 @@ class DirectTestRunner:
         Returns:
             Tuple of (return_code, output)
         """
-        self.logger.info(f"[{service}] Executing {phase}: {' '.join(cmd)}")
+        logger.info(f"[{service}] Executing {phase}: {' '.join(cmd)}")
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -155,7 +129,7 @@ class DirectTestRunner:
             try:
                 await asyncio.wait_for(process.wait(), timeout=timeout)
             except asyncio.TimeoutError:
-                self.logger.error(f"[{service}] {phase} timed out after {timeout}s")
+                logger.error(f"[{service}] {phase} timed out after {timeout}s")
                 process.kill()
                 await process.wait()
                 return (-1, "\n".join(output_lines))
@@ -163,11 +137,11 @@ class DirectTestRunner:
             return_code = process.returncode
             output = "\n".join(output_lines)
 
-            self.logger.info(f"[{service}] {phase} completed with code {return_code}")
+            logger.info(f"[{service}] {phase} completed with code {return_code}")
             return (return_code, output)
 
         except Exception as e:
-            self.logger.error(f"[{service}] Error executing {phase}: {e}", exc_info=True)
+            logger.error(f"[{service}] Error executing {phase}: {e}", exc_info=True)
             return (-1, str(e))
 
     def _parse_maven_output(self, service: str, line: str):
@@ -176,7 +150,7 @@ class DirectTestRunner:
         building_match = re.search(r'\[INFO\]\s+Building\s+([\w\-]+)', line)
         if building_match:
             self.current_module = building_match.group(1)
-            self.logger.debug(f"[{service}] Detected Maven module: {self.current_module}")
+            logger.debug(f"[{service}] Detected Maven module: {self.current_module}")
 
     def _count_tests_from_surefire(
         self,
@@ -235,16 +209,16 @@ class DirectTestRunner:
                     tests_run += tests
                     tests_failed += failures + errors
 
-                    self.logger.debug(f"{profile_prefix}Parsed {xml_file.name}: {tests} tests, {failures + errors} failed")
+                    logger.debug(f"{profile_prefix}Parsed {xml_file.name}: {tests} tests, {failures + errors} failed")
 
                 except Exception as e:
-                    self.logger.warning(f"{profile_prefix}Failed to parse {xml_file}: {e}")
+                    logger.warning(f"{profile_prefix}Failed to parse {xml_file}: {e}")
                     continue
 
         if xml_files_found > 0:
-            self.logger.info(f"{profile_prefix}Surefire XML parsing: {tests_run} tests run, {tests_failed} failed from {xml_files_found} file(s)")
+            logger.info(f"{profile_prefix}Surefire XML parsing: {tests_run} tests run, {tests_failed} failed from {xml_files_found} file(s)")
         else:
-            self.logger.debug(f"{profile_prefix}No surefire XML reports found")
+            logger.debug(f"{profile_prefix}No surefire XML reports found")
 
         return (tests_run, tests_failed)
 
@@ -254,24 +228,24 @@ class DirectTestRunner:
         profile_lower = profile.lower()
         profile_normalized = profile_lower.replace("-", "")
 
-        self.logger.debug(f"[{service}:{profile}] Mapping profile to module directories in {base_path}")
+        logger.debug(f"[{service}:{profile}] Mapping profile to module directories in {base_path}")
 
         # Pattern 1: {service}-{profile}/
         direct_module = base_path / f"{service}-{profile}"
         if direct_module.exists() and direct_module.is_dir():
-            self.logger.debug(f"[{service}:{profile}] Found direct module: {direct_module.name}")
+            logger.debug(f"[{service}:{profile}] Found direct module: {direct_module.name}")
             module_paths.append(direct_module)
 
         # Pattern 2: providers/{service}-{profile}/
         providers_module = base_path / "providers" / f"{service}-{profile}"
         if providers_module.exists() and providers_module.is_dir():
-            self.logger.debug(f"[{service}:{profile}] Found providers module: {providers_module.name}")
+            logger.debug(f"[{service}:{profile}] Found providers module: {providers_module.name}")
             module_paths.append(providers_module)
 
         # Pattern 3: provider/{service}-{profile}/
         provider_module = base_path / "provider" / f"{service}-{profile}"
         if provider_module.exists() and provider_module.is_dir():
-            self.logger.debug(f"[{service}:{profile}] Found provider module: {provider_module.name}")
+            logger.debug(f"[{service}:{profile}] Found provider module: {provider_module.name}")
             module_paths.append(provider_module)
 
         # Pattern 4: Check all subdirectories for matching names
@@ -284,17 +258,17 @@ class DirectTestRunner:
             if profile == "core-plus":
                 if "coreplus" in item_normalized or "core-plus" in item.name.lower():
                     if item not in module_paths:
-                        self.logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
+                        logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
                         module_paths.append(item)
             elif profile == "core":
                 if "core" in item_normalized and "coreplus" not in item_normalized:
                     if item not in module_paths:
-                        self.logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
+                        logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
                         module_paths.append(item)
             else:
                 if profile_normalized in item_normalized:
                     if item not in module_paths:
-                        self.logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
+                        logger.debug(f"[{service}:{profile}] Found matching module: {item.name}")
                         module_paths.append(item)
 
         # Pattern 5: Check providers/ and provider/ subdirectories
@@ -311,23 +285,23 @@ class DirectTestRunner:
                 if profile == "core-plus":
                     if "coreplus" in item_normalized or "core-plus" in item.name.lower():
                         if item not in module_paths:
-                            self.logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
+                            logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
                             module_paths.append(item)
                 elif profile == "core":
                     if "core" in item_normalized and "coreplus" not in item_normalized:
                         if item not in module_paths:
-                            self.logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
+                            logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
                             module_paths.append(item)
                 else:
                     if profile_normalized in item_normalized:
                         if item not in module_paths:
-                            self.logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
+                            logger.debug(f"[{service}:{profile}] Found provider submodule: {item.name}")
                             module_paths.append(item)
 
         if module_paths:
-            self.logger.info(f"[{service}:{profile}] Mapped profile to {len(module_paths)} module(s): {[p.name for p in module_paths]}")
+            logger.info(f"[{service}:{profile}] Mapped profile to {len(module_paths)} module(s): {[p.name for p in module_paths]}")
         else:
-            self.logger.warning(f"[{service}:{profile}] No module directories found for profile")
+            logger.warning(f"[{service}:{profile}] No module directories found for profile")
 
         return module_paths
 
@@ -340,7 +314,7 @@ class DirectTestRunner:
         Returns:
             Dict with test results
         """
-        self.logger.info(f"[{service}] Starting test execution")
+        logger.info(f"[{service}] Starting test execution")
 
         # Locate service directory
         base_path = Path.cwd() / "repos" / service
@@ -349,14 +323,14 @@ class DirectTestRunner:
 
         if not base_path.exists():
             error_msg = "Service directory not found"
-            self.logger.error(f"[{service}] {error_msg}")
+            logger.error(f"[{service}] {error_msg}")
             self.tracker.update(service, "error", error_msg)
             return {"service": service, "status": "error", "message": error_msg}
 
         pom_path = base_path / "pom.xml"
         if not pom_path.exists():
             error_msg = "No pom.xml found"
-            self.logger.error(f"[{service}] {error_msg}")
+            logger.error(f"[{service}] {error_msg}")
             self.tracker.update(service, "error", error_msg)
             return {"service": service, "status": "error", "message": error_msg}
 
@@ -416,7 +390,7 @@ class DirectTestRunner:
 
         except Exception as e:
             error_msg = f"Exception: {str(e)}"
-            self.logger.error(f"[{service}] {error_msg}", exc_info=True)
+            logger.error(f"[{service}] {error_msg}", exc_info=True)
             self.tracker.update(service, "error", error_msg)
             return {"service": service, "status": "error", "message": error_msg}
 
@@ -428,20 +402,20 @@ class DirectTestRunner:
 
         if not base_path.exists():
             msg = "Service directory not found"
-            self.logger.warning(f"[{service}] {msg}")
+            logger.warning(f"[{service}] {msg}")
             return (False, msg)
 
         pom_path = base_path / "pom.xml"
         if not pom_path.exists():
             msg = "No pom.xml found"
-            self.logger.warning(f"[{service}] {msg}")
+            logger.warning(f"[{service}] {msg}")
             return (False, msg)
 
         try:
             pom_content = pom_path.read_text(encoding='utf-8')
         except Exception as exc:
             pom_content = ""
-            self.logger.debug(f"[{service}] Failed to read pom.xml: {exc}")
+            logger.debug(f"[{service}] Failed to read pom.xml: {exc}")
 
         has_root_jacoco = "jacoco-maven-plugin" in pom_content
 
@@ -451,7 +425,7 @@ class DirectTestRunner:
             try:
                 module_dirs = self._map_profile_to_modules(service, base_path, profile)
             except Exception as exc:
-                self.logger.debug(f"[{service}] Failed mapping profile '{profile}': {exc}")
+                logger.debug(f"[{service}] Failed mapping profile '{profile}': {exc}")
                 module_dirs = []
 
             if module_dirs:
@@ -470,7 +444,7 @@ class DirectTestRunner:
                 modules_to_process[base_path] = set()
             else:
                 msg = "JaCoCo plugin not configured for requested profiles"
-                self.logger.warning(f"[{service}] {msg}")
+                logger.warning(f"[{service}] {msg}")
                 return (False, msg)
 
         coverage_timeout = 60
@@ -484,12 +458,12 @@ class DirectTestRunner:
                 if module_dir != base_path else "."
             )
             profile_label = ",".join(sorted(profiles)) if profiles else "all"
-            self.logger.info(
+            logger.info(
                 f"[{service}] Generating coverage for module {module_rel} (profiles: {profile_label})"
             )
 
             cmd = ["mvn", "jacoco:report", "-DskipTests"]
-            self.logger.debug(f"[{service}] Command ({module_rel}): {' '.join(cmd)}")
+            logger.debug(f"[{service}] Command ({module_rel}): {' '.join(cmd)}")
 
             try:
                 result = subprocess.run(
@@ -502,11 +476,11 @@ class DirectTestRunner:
                 )
 
                 if result.returncode == 0:
-                    self.logger.info(
+                    logger.info(
                         f"[{service}] ✓ Coverage generation succeeded for module {module_rel}"
                     )
                     if "BUILD SUCCESS" in result.stdout:
-                        self.logger.debug(
+                        logger.debug(
                             f"[{service}] {module_rel}: Maven reported BUILD SUCCESS"
                         )
                     success_modules.append(module_rel)
@@ -515,30 +489,30 @@ class DirectTestRunner:
                     msg = (
                         f"{module_rel} failed (exit code {result.returncode}) - {stderr_preview}"
                     )
-                    self.logger.error(f"[{service}] ✗ {msg}")
+                    logger.error(f"[{service}] ✗ {msg}")
                     if result.stdout:
-                        self.logger.debug(f"[{service}] {module_rel} stdout:\n{result.stdout}")
+                        logger.debug(f"[{service}] {module_rel} stdout:\n{result.stdout}")
                     if result.stderr:
-                        self.logger.debug(f"[{service}] {module_rel} stderr:\n{result.stderr}")
+                        logger.debug(f"[{service}] {module_rel} stderr:\n{result.stderr}")
                     failed_modules.append(module_rel)
                     failure_messages.append(msg)
 
             except subprocess.TimeoutExpired:
                 msg = f"{module_rel} timed out after {coverage_timeout}s"
-                self.logger.error(f"[{service}] ✗ {msg}")
+                logger.error(f"[{service}] ✗ {msg}")
                 failed_modules.append(module_rel)
                 failure_messages.append(msg)
 
             except FileNotFoundError:
                 msg = "Maven command not found"
-                self.logger.error(f"[{service}] ✗ {msg}")
+                logger.error(f"[{service}] ✗ {msg}")
                 return (False, msg)
 
             except Exception as exc:
                 msg = f"{module_rel} unexpected error: {exc}"
-                self.logger.error(f"[{service}] ✗ {msg}")
+                logger.error(f"[{service}] ✗ {msg}")
                 import traceback
-                self.logger.debug(f"[{service}] Traceback:\n{traceback.format_exc()}")
+                logger.debug(f"[{service}] Traceback:\n{traceback.format_exc()}")
                 failed_modules.append(module_rel)
                 failure_messages.append(msg)
 
@@ -564,11 +538,11 @@ class DirectTestRunner:
             relative = csv_path.relative_to(base_path)
 
             if len(relative.parts) > JACOCO_CSV_MAX_SEARCH_DEPTH:
-                self.logger.debug(f"[{service}] Skipping {csv_path} (exceeds depth limit)")
+                logger.debug(f"[{service}] Skipping {csv_path} (exceeds depth limit)")
                 continue
 
             if "test-classes" in relative.parts:
-                self.logger.debug(f"[{service}] Skipping {csv_path} (test-classes artifact)")
+                logger.debug(f"[{service}] Skipping {csv_path} (test-classes artifact)")
                 continue
 
             module_hint = next(
@@ -577,7 +551,7 @@ class DirectTestRunner:
             )
             csv_files.append((csv_path, f"discovered:{module_hint}"))
 
-        self.logger.info(
+        logger.info(
             f"[{service}] Recursive search found {len(csv_files)} jacoco.csv file(s)"
         )
         return csv_files
@@ -594,7 +568,7 @@ class DirectTestRunner:
         csv_paths = []
 
         if profile:
-            self.logger.info(f"{profile_prefix}Starting profile-specific coverage extraction")
+            logger.info(f"{profile_prefix}Starting profile-specific coverage extraction")
 
             module_dirs = self._map_profile_to_modules(service, base_path, profile)
 
@@ -603,12 +577,12 @@ class DirectTestRunner:
                     module_csv = module_dir / "target" / "site" / "jacoco" / "jacoco.csv"
                     if module_csv.exists():
                         csv_paths.append((module_csv, f"module:{module_dir.name}"))
-                        self.logger.debug(f"{profile_prefix}Queued module CSV: {module_csv}")
+                        logger.debug(f"{profile_prefix}Queued module CSV: {module_csv}")
                     else:
-                        self.logger.warning(f"{profile_prefix}Module {module_dir.name} has no jacoco.csv")
+                        logger.warning(f"{profile_prefix}Module {module_dir.name} has no jacoco.csv")
 
             if not csv_paths:
-                self.logger.warning(f"{profile_prefix}No module-specific CSVs found, trying recursive search")
+                logger.warning(f"{profile_prefix}No module-specific CSVs found, trying recursive search")
                 all_discovered = self._find_all_jacoco_csvs(service, base_path)
 
                 profile_normalized = profile.lower().replace("-", "")
@@ -628,9 +602,9 @@ class DirectTestRunner:
 
                     if matched:
                         csv_paths.append((csv_path, f"discovered:filtered:{source_hint.split(':')[1]}"))
-                        self.logger.info(f"{profile_prefix}Matched discovered CSV: {csv_path}")
+                        logger.info(f"{profile_prefix}Matched discovered CSV: {csv_path}")
         else:
-            self.logger.info(f"{profile_prefix}Starting service-level coverage extraction")
+            logger.info(f"{profile_prefix}Starting service-level coverage extraction")
 
             aggregated_csv = base_path / "target" / "site" / "jacoco" / "jacoco.csv"
             if aggregated_csv.exists():
@@ -650,7 +624,7 @@ class DirectTestRunner:
                     if item_csv.exists() and (item_csv, f"module:{item.name}") not in csv_paths:
                         csv_paths.append((item_csv, f"module:{item.name}"))
 
-        self.logger.info(f"{profile_prefix}Found {len(csv_paths)} CSV file(s) to process")
+        logger.info(f"{profile_prefix}Found {len(csv_paths)} CSV file(s) to process")
 
         total_line_covered = 0
         total_line_missed = 0
@@ -661,12 +635,12 @@ class DirectTestRunner:
 
         for csv_path, csv_source in csv_paths:
             try:
-                self.logger.debug(f"{profile_prefix}Processing CSV: {csv_path} (source: {csv_source})")
+                logger.debug(f"{profile_prefix}Processing CSV: {csv_path} (source: {csv_source})")
                 content = csv_path.read_text(encoding='utf-8')
                 lines = content.strip().split('\n')
 
                 if len(lines) < 2:
-                    self.logger.warning(f"{profile_prefix}CSV file is empty: {csv_path}")
+                    logger.warning(f"{profile_prefix}CSV file is empty: {csv_path}")
                     continue
 
                 csv_rows_matched = 0
@@ -677,7 +651,7 @@ class DirectTestRunner:
 
                     parts = line.split(',')
                     if len(parts) < 9:
-                        self.logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}")
+                        logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}")
                         continue
 
                     try:
@@ -693,16 +667,16 @@ class DirectTestRunner:
                         csv_rows_matched += 1
 
                     except (ValueError, IndexError) as e:
-                        self.logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}: {e}")
+                        logger.debug(f"{profile_prefix}Skipping malformed CSV row {i}: {e}")
                         continue
 
                 files_parsed += 1
                 rows_matched += csv_rows_matched
 
-                self.logger.info(f"{profile_prefix}Parsed {csv_path.name}: {csv_rows_matched} rows")
+                logger.info(f"{profile_prefix}Parsed {csv_path.name}: {csv_rows_matched} rows")
 
             except Exception as e:
-                self.logger.error(f"{profile_prefix}Failed to parse CSV at {csv_path}: {e}")
+                logger.error(f"{profile_prefix}Failed to parse CSV at {csv_path}: {e}")
                 continue
 
         # Calculate percentages
@@ -716,9 +690,9 @@ class DirectTestRunner:
             branch_cov = (total_branch_covered / (total_branch_covered + total_branch_missed)) * 100
 
         if files_parsed > 0:
-            self.logger.info(f"{profile_prefix}Coverage: {line_cov:.1f}% line, {branch_cov:.1f}% branch from {files_parsed} file(s)")
+            logger.info(f"{profile_prefix}Coverage: {line_cov:.1f}% line, {branch_cov:.1f}% branch from {files_parsed} file(s)")
         else:
-            self.logger.warning(f"{profile_prefix}No CSV files parsed")
+            logger.warning(f"{profile_prefix}No CSV files parsed")
 
         return (line_cov, branch_cov)
 
@@ -737,10 +711,10 @@ class DirectTestRunner:
                     break
 
             if not base_path:
-                self.logger.warning(f"[{service}] No valid path found for coverage extraction")
+                logger.warning(f"[{service}] No valid path found for coverage extraction")
                 continue
 
-            self.logger.debug(f"[{service}] Searching for coverage reports in: {base_path}")
+            logger.debug(f"[{service}] Searching for coverage reports in: {base_path}")
 
             if len(self.profiles) > 1:
                 for profile in self.profiles:
@@ -1114,7 +1088,6 @@ class DirectTestRunner:
     async def run(self) -> int:
         """Execute Maven tests for all services with parallel execution."""
         self.show_config()
-        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
 
         try:
             # Execute tests in parallel
@@ -1172,9 +1145,6 @@ class DirectTestRunner:
             )
             return_code = 0 if all_ok else 1
 
-            # Save log
-            self._save_log(return_code)
-
             return return_code
 
         except Exception as e:
@@ -1182,50 +1152,3 @@ class DirectTestRunner:
             import traceback
             traceback.print_exc()
             return 1
-
-    def _save_log(self, return_code: int):
-        """Save execution log to file."""
-        try:
-            with open(self.log_file, "a") as f:
-                f.write(f"{'='*70}\n")
-                f.write("Maven Test Execution Log\n")
-                f.write(f"{'='*70}\n")
-                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                f.write(f"Services: {', '.join(self.services)}\n")
-                f.write(f"Provider: {self.provider}\n")
-                f.write(f"Exit Code: {return_code}\n")
-                f.write(f"{'='*70}\n\n")
-
-                f.write("=== TEST RESULTS ===\n\n")
-                for service, data in self.tracker.services.items():
-                    f.write(f"{service}:\n")
-                    f.write(f"  Status: {data['status']}\n")
-                    f.write(f"  Phase: {data.get('phase', 'N/A')}\n")
-                    f.write(f"  Tests Run: {data['tests_run']}\n")
-                    f.write(f"  Tests Failed: {data['tests_failed']}\n")
-                    f.write(f"  Coverage Line: {data['coverage_line']}%\n")
-                    f.write(f"  Coverage Branch: {data['coverage_branch']}%\n")
-                    if data.get("quality_grade"):
-                        f.write(f"  Quality Grade: {data['quality_grade']} - {data.get('quality_label', 'N/A')}\n")
-                        f.write(f"  Quality Summary: {data.get('quality_summary', 'N/A')}\n")
-
-                    profiles = data.get("profiles", {})
-                    if profiles:
-                        f.write("\n  Profile Breakdown:\n")
-                        for profile_name in ["core", "core-plus", "azure", "aws", "gc", "ibm"]:
-                            if profile_name not in profiles:
-                                continue
-                            profile_data = profiles[profile_name]
-                            f.write(f"    {profile_name}:\n")
-                            f.write(f"      Tests Run: {profile_data.get('tests_run', 0)}\n")
-                            f.write(f"      Tests Failed: {profile_data.get('tests_failed', 0)}\n")
-                            f.write(f"      Coverage Line: {profile_data.get('coverage_line', 0)}%\n")
-                            f.write(f"      Coverage Branch: {profile_data.get('coverage_branch', 0)}%\n")
-                            if profile_data.get("quality_grade"):
-                                f.write(f"      Quality Grade: {profile_data['quality_grade']} - {profile_data.get('quality_label', 'N/A')}\n")
-
-                    f.write("\n")
-
-            console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
-        except Exception as e:
-            console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
