@@ -1,5 +1,6 @@
 """Copilot fork runner for repository initialization."""
 
+import asyncio
 import logging
 import re
 from importlib.resources.abc import Traversable
@@ -228,53 +229,59 @@ class CopilotRunner(BaseRunner):
                     self.tracker.update(service, "error", "Permission denied")
 
     async def run_direct(self) -> int:
-        """Execute direct API fork operations for fast execution."""
+        """Execute direct API fork operations for fast execution with parallel processing."""
         from spi_agent.config import AgentConfig
         from spi_agent.github.fork_client import ForkDirectClient
         from rich.live import Live
 
         self.show_config()
-        console.print("[bold blue]Using direct API mode (fast)...[/bold blue]\n")
 
         # Create fork client
         agent_config = AgentConfig()
         fork_client = ForkDirectClient(agent_config)
 
-        # Create layout for live updates
-        layout = self.create_layout()
-        layout["status"].update(self.tracker.get_table())
+        # Create status callback to update tracker
+        def status_callback(service: str, status: str, details: str):
+            """Callback for fork_client to update service status."""
+            self.tracker.update(service, status, details)
+
+        async def fork_service_with_updates(service: str):
+            """Fork a single service with live status updates."""
+            try:
+                # Fork the service with status callback
+                result = await fork_client.fork_service(
+                    service, self.branch, status_callback=status_callback
+                )
+
+                # Update tracker based on final result
+                if result["status"] == "success":
+                    self.tracker.update(service, "success", "Completed successfully")
+                elif result["status"] == "skipped":
+                    self.tracker.update(service, "skipped", result["message"])
+                else:
+                    self.tracker.update(service, "error", result["message"])
+
+                return result
+
+            except Exception as e:
+                error_msg = f"Exception: {str(e)}"
+                logger.error(f"Error forking {service}: {e}", exc_info=True)
+                self.tracker.update(service, "error", error_msg)
+                return {
+                    "service": service,
+                    "status": "error",
+                    "message": error_msg
+                }
 
         try:
-            with Live(layout, console=console, refresh_per_second=4) as live:
-                # Process each service
-                for service in self.services:
-                    self.tracker.update(service, "running", "Initializing fork...")
-                    layout["status"].update(self.tracker.get_table())
+            # Display only the status table (no split layout)
+            with Live(self.tracker.get_table(), console=console, refresh_per_second=4) as live:
+                # Process all services in parallel
+                tasks = [fork_service_with_updates(service) for service in self.services]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    # Fork the service
-                    result = await fork_client.fork_service(service, self.branch)
-
-                    # Update output panel with result
-                    self.output_lines.append(f"{'='*60}")
-                    self.output_lines.append(f"Service: {service}")
-                    self.output_lines.append(f"Status: {result['status']}")
-                    self.output_lines.append(f"Message: {result['message']}")
-                    if "repo_url" in result:
-                        self.output_lines.append(f"URL: {result['repo_url']}")
-                    self.output_lines.append(f"{'='*60}")
-                    layout["output"].update(self._output_panel_renderable)
-
-                    # Update tracker based on result
-                    if result["status"] == "success":
-                        self.tracker.update(
-                            service, "success", "Completed successfully"
-                        )
-                    elif result["status"] == "skipped":
-                        self.tracker.update(service, "skipped", result["message"])
-                    else:
-                        self.tracker.update(service, "error", result["message"])
-
-                    layout["status"].update(self.tracker.get_table())
+                # Final table update
+                live.update(self.tracker.get_table())
 
             # Post-processing outside Live context
             console.print()

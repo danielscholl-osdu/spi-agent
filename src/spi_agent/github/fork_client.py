@@ -5,9 +5,10 @@ import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
-from github import Github, GithubException
+from github import Auth, Github, GithubException
+from urllib3.util.retry import Retry
 
 from spi_agent.config import AgentConfig
 
@@ -47,12 +48,20 @@ class ForkDirectClient:
         """
         self.config = config
 
-        # Initialize GitHub client
+        # Configure retry strategy for transient failures
+        retry = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+
+        # Initialize GitHub client with larger pool size for parallel requests
         if config.github_token:
-            self.github = Github(config.github_token)
+            auth = Auth.Token(config.github_token)
+            self.github = Github(auth=auth, pool_size=50, retry=retry)
             logger.info("Authenticated to GitHub with token")
         else:
-            self.github = Github()
+            self.github = Github(pool_size=50, retry=retry)
             logger.info("Using GitHub without authentication (rate limited)")
 
         # Set repos directory
@@ -60,14 +69,20 @@ class ForkDirectClient:
         self.repos_dir.mkdir(exist_ok=True)
 
     async def fork_service(
-        self, service: str, branch: str = "main"
+        self, service: str, branch: str = "main", status_callback: Optional[Callable[[str, str, str], None]] = None
     ) -> Dict[str, Any]:
         """
-        Fork a single service repository.
+        Fork a single service repository with intelligent edge case handling.
+
+        **Edge Cases Handled:**
+        1. Repository exists in GitHub + exists locally -> Pull latest changes
+        2. Repository exists in GitHub + missing locally -> Clone from GitHub
+        3. Repository doesn't exist -> Create from template, run workflows, clone
 
         Args:
             service: Service name (e.g., "partition")
             branch: Branch to use (default: "main")
+            status_callback: Optional callback(service, status, details) for live updates
 
         Returns:
             Result dictionary with status and details
@@ -75,7 +90,13 @@ class ForkDirectClient:
         repo_name = self.config.get_repo_full_name(service)
         upstream_url = SERVICE_UPSTREAM_REPOS.get(service)
 
+        def update_status(status: str, details: str):
+            """Helper to call status callback if provided."""
+            if status_callback:
+                status_callback(service, status, details)
+
         if not upstream_url:
+            update_status("error", f"Unknown service: {service}")
             return {
                 "service": service,
                 "status": "error",
@@ -83,6 +104,7 @@ class ForkDirectClient:
             }
 
         logger.info(f"Starting fork for {service} (branch: {branch})")
+        update_status("running", "Checking if repository exists...")
 
         try:
             # Step 1: Check if repo already exists
@@ -90,22 +112,34 @@ class ForkDirectClient:
 
             if repo_exists:
                 logger.info(f"Repository {repo_name} already exists - skipping creation")
-                # Just sync the local clone
-                await self._sync_local_repo(service, repo_name)
+
+                # Check if local repo exists
+                local_dir = self.repos_dir / service
+                if local_dir.exists():
+                    update_status("running", "Repository exists - syncing latest changes...")
+                    await self._sync_local_repo(service, repo_name)
+                    skip_message = "Repository exists - synced latest changes"
+                else:
+                    update_status("running", "Repository exists - cloning locally...")
+                    await self._sync_local_repo(service, repo_name)
+                    skip_message = "Repository exists - cloned locally"
+
                 return {
                     "service": service,
                     "status": "skipped",
-                    "message": "Repository already exists",
+                    "message": skip_message,
                     "repo_url": f"https://github.com/{repo_name}",
                 }
 
             # Step 2: Create repository from template
             logger.info(f"Creating {repo_name} from template {TEMPLATE_REPO}")
+            update_status("running", "Creating repository from template...")
             create_result = await self._create_from_template(
                 service, repo_name, branch
             )
 
             if not create_result["success"]:
+                update_status("error", f"Failed to create: {create_result['error']}")
                 return {
                     "service": service,
                     "status": "error",
@@ -114,11 +148,13 @@ class ForkDirectClient:
 
             # Step 3: Wait for "Initialize Fork" workflow
             logger.info(f"Waiting for Initialize Fork workflow on {repo_name}")
+            update_status("waiting", "Waiting for Initialize Fork workflow...")
             init_fork_result = await self._wait_for_workflow(
                 repo_name, "Initialize Fork", timeout=300
             )
 
             if not init_fork_result["success"]:
+                update_status("error", f"Initialize Fork failed: {init_fork_result['error']}")
                 return {
                     "service": service,
                     "status": "error",
@@ -127,6 +163,7 @@ class ForkDirectClient:
 
             # Step 4: Find and comment on initialization issue
             logger.info(f"Finding initialization issue in {repo_name}")
+            update_status("running", "Commenting on initialization issue...")
             issue_result = await self._comment_on_init_issue(
                 repo_name, upstream_url
             )
@@ -137,11 +174,13 @@ class ForkDirectClient:
 
             # Step 5: Wait for "Initialize Complete" workflow
             logger.info(f"Waiting for Initialize Complete workflow on {repo_name}")
+            update_status("waiting", "Waiting for Initialize Complete workflow...")
             init_complete_result = await self._wait_for_workflow(
                 repo_name, "Initialize Complete", timeout=600
             )
 
             if not init_complete_result["success"]:
+                update_status("error", f"Initialize Complete failed: {init_complete_result['error']}")
                 return {
                     "service": service,
                     "status": "error",
@@ -149,6 +188,7 @@ class ForkDirectClient:
                 }
 
             # Step 6: Clone/pull repository locally
+            update_status("running", "Cloning repository locally...")
             await self._sync_local_repo(service, repo_name)
 
             logger.info(f"Successfully forked {service}")
@@ -161,10 +201,12 @@ class ForkDirectClient:
 
         except Exception as e:
             logger.error(f"Error forking {service}: {e}", exc_info=True)
+            error_msg = f"Unexpected error: {str(e)}"
+            update_status("error", error_msg)
             return {
                 "service": service,
                 "status": "error",
-                "message": f"Unexpected error: {str(e)}",
+                "message": error_msg,
             }
 
     async def _check_repo_exists(self, repo_name: str) -> bool:

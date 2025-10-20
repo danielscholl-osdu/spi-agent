@@ -1,10 +1,15 @@
 """Base class for GitHub tools with common formatting methods."""
 
+import logging
 from typing import Any, Dict
 
 from github import Auth, Github
+from urllib3.util.retry import Retry
 
 from spi_agent.config import AgentConfig
+
+# Suppress urllib3 connection pool warnings (they're informational, not errors)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
 
 class GitHubToolsBase:
@@ -12,20 +17,27 @@ class GitHubToolsBase:
 
     def __init__(self, config: AgentConfig):
         """
-        Initialize GitHub tools.
+        Initialize GitHub tools with larger connection pool for parallel requests.
 
         Args:
             config: Agent configuration containing GitHub token and org info
         """
         self.config = config
 
-        # Initialize GitHub client
+        # Configure retry strategy for transient failures
+        retry = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+
+        # Initialize GitHub client with larger pool size for parallel requests
         if config.github_token:
             auth = Auth.Token(config.github_token)
-            self.github = Github(auth=auth)
+            self.github = Github(auth=auth, pool_size=50, retry=retry)
         else:
             # Try without authentication (limited API calls)
-            self.github = Github()
+            self.github = Github(pool_size=50, retry=retry)
 
     def _format_issue(self, issue: Any) -> Dict[str, Any]:
         """Format GitHub issue object to dict."""

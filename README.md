@@ -173,16 +173,16 @@ Get comprehensive status for GitLab repositories with provider-based filtering:
 
 ```bash
 # Check single project with default providers (Azure,Core)
-spi-agent status-glab --projects partition
+spi-agent status --service partition --platform gitlab
 
 # Check multiple projects with Azure provider only
-spi-agent status-glab --projects partition,legal --provider Azure
+spi-agent status --service partition,legal --platform gitlab --provider Azure
 
 # Check all projects with both Azure and Core providers
-spi-agent status-glab --projects all --provider Azure,Core
+spi-agent status --service all --platform gitlab --provider Azure,Core
 
 # Check single project with custom provider
-spi-agent status-glab --projects storage --provider GCP
+spi-agent status --service storage --platform gitlab --provider GCP
 ```
 
 **What It Shows:**

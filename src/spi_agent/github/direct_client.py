@@ -5,7 +5,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from github import Github, GithubException
+from github import Auth, Github, GithubException
+from urllib3.util.retry import Retry
 
 from spi_agent.config import AgentConfig
 
@@ -22,19 +23,27 @@ class GitHubDirectClient:
 
     def __init__(self, config: AgentConfig):
         """
-        Initialize GitHub direct client.
+        Initialize GitHub direct client with larger connection pool for parallel requests.
 
         Args:
             config: Agent configuration with GitHub settings
         """
         self.config = config
 
-        # Initialize GitHub client
+        # Configure retry strategy for transient failures
+        retry = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+
+        # Initialize GitHub client with larger pool size for parallel requests
         if config.github_token:
-            self.github = Github(config.github_token)
+            auth = Auth.Token(config.github_token)
+            self.github = Github(auth=auth, pool_size=50, retry=retry)
             logger.info("Authenticated to GitHub with token")
         else:
-            self.github = Github()
+            self.github = Github(pool_size=50, retry=retry)
             logger.info("Using GitHub without authentication (rate limited)")
 
     async def get_all_status(

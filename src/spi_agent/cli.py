@@ -59,7 +59,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "fork":
         if len(parts) < 2:
-            return "Usage: /fork <services> [--branch <branch>]\nExample: /fork partition,legal"
+            return "Usage: /fork <service> [--branch <branch>]\nExample: /fork partition,legal"
 
         services_arg = parts[1]
         branch = "main"
@@ -98,7 +98,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "status":
         if len(parts) < 2:
-            return "Usage: /status <services> [--platform github|gitlab] [--provider <providers>]\nExamples:\n  /status partition\n  /status partition --platform gitlab --provider azure"
+            return "Usage: /status <service> [--platform github|gitlab] [--provider <providers>]\nExamples:\n  /status partition\n  /status partition --platform gitlab --provider azure"
 
         services_arg = parts[1]
 
@@ -150,7 +150,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "test":
         if len(parts) < 2:
-            return "Usage: /test <services> [--provider <provider>]\nExample: /test partition --provider azure"
+            return "Usage: /test <service> [--provider <provider>]\nExample: /test partition --provider azure"
 
         services_arg = parts[1]
         provider = "core,core-plus,azure"  # Default to comprehensive core + azure coverage
@@ -189,7 +189,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "vulns":
         if len(parts) < 2:
-            return "Usage: /vulns <services> [--create-issue] [--severity LEVEL] [--providers PROVIDERS] [--include-testing]\nExample: /vulns partition\nExample: /vulns partition --providers azure,aws --include-testing"
+            return "Usage: /vulns <service> [--create-issue] [--severity LEVEL] [--providers PROVIDERS] [--include-testing]\nExample: /vulns partition\nExample: /vulns partition --providers azure,aws --include-testing"
 
         services_arg = parts[1]
         create_issue = "--create-issue" in parts
@@ -279,18 +279,18 @@ def _render_help() -> None:
 - "Run vulnerability scan for partition and create issues for critical CVEs"
 
 **Slash Commands:**
-- `/fork partition` - Fork partition repository
-- `/fork partition,legal` - Fork multiple repositories
-- `/fork partition --branch develop` - Fork with custom branch
-- `/status partition` - Check GitHub status for partition (default)
-- `/status partition,legal` - Check status for multiple repos
-- `/status partition --platform gitlab` - Check GitLab status (providers: Azure,Core)
-- `/status partition --platform gitlab --provider azure` - GitLab status (azure only)
-- `/test partition` - Run Maven tests (default: core,core-plus,azure profiles)
-- `/test partition --provider aws` - Run tests with specific provider
-- `/vulns partition` - Run dependency/vulnerability analysis
-- `/vulns partition --create-issue` - Scan and create issues for vulnerabilities
-- `/vulns partition --severity critical,high` - Filter by severity
+- `/fork <service>` - Fork service repository
+- `/fork <service>,<service>` - Fork multiple repositories
+- `/fork <service> --branch develop` - Fork with custom branch
+- `/status <service>` - Check GitHub status for service (default)
+- `/status <service>,<service>` - Check status for multiple repos
+- `/status <service> --platform gitlab` - Check GitLab status (providers: Azure,Core)
+- `/status <service> --platform gitlab --provider azure` - GitLab status (azure only)
+- `/test <service>` - Run Maven tests (default: core,core-plus,azure profiles)
+- `/test <service> --provider aws` - Run tests with specific provider
+- `/vulns <service>` - Run dependency/vulnerability analysis
+- `/vulns <service> --create-issue` - Scan and create issues for vulnerabilities
+- `/vulns <service> --severity critical,high` - Filter by severity
 - `/help` - Show this help
 """
     console.print(Panel(Markdown(help_text), title="💡 Help", border_style="yellow"))
@@ -445,14 +445,11 @@ Commands:
 Examples:
   spi-agent                                    # Interactive chat
   spi-agent -p "List issues in partition"      # One-shot query
-  spi-agent fork --services partition          # Fork repos
-  spi-agent status --services partition        # Check GitHub status (default)
-  spi-agent status --services partition,legal  # Check multiple repos
-  spi-agent status --services partition --platform gitlab  # Check GitLab status
-  spi-agent status --services partition --platform gitlab --provider azure  # GitLab (azure only)
-  spi-agent test --services partition          # Run Maven tests
-  spi-agent vulns --services partition         # Run vulnerability analysis
-  spi-agent vulns --services partition --create-issue  # Scan + create issues
+  spi-agent fork --service partition          # Fork repos
+  spi-agent status --service partition        # Check GitHub status (default)
+  spi-agent status --service partition --platform gitlab  # Check GitLab status
+  spi-agent test --service partition          # Run Maven tests
+  spi-agent vulns --service partition         # Run vulnerability analysis
         """,
     )
 
@@ -465,10 +462,10 @@ Examples:
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         fork_parser.add_argument(
-            "--services",
+            "--service",
             "-s",
-            required=True,
-            help="Service name(s): 'all', single name, or comma-separated list",
+            default="all",
+            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
         )
         fork_parser.add_argument(
             "--branch",
@@ -483,10 +480,10 @@ Examples:
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         status_parser.add_argument(
-            "--services",
+            "--service",
             "-s",
-            required=True,
-            help="Service name(s): 'all', single name, or comma-separated list",
+            default="all",
+            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
         )
         status_parser.add_argument(
             "--platform",
@@ -505,10 +502,10 @@ Examples:
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         test_parser.add_argument(
-            "--services",
+            "--service",
             "-s",
-            required=True,
-            help="Service name(s): 'all', single name, or comma-separated list",
+            default="all",
+            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
         )
         test_parser.add_argument(
             "--provider",
@@ -523,10 +520,10 @@ Examples:
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         vulns_parser.add_argument(
-            "--services",
+            "--service",
             "-s",
-            required=True,
-            help="Service name(s): 'all', single name, or comma-separated list",
+            default="all",
+            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
         )
         vulns_parser.add_argument(
             "--create-issue",
@@ -582,14 +579,14 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        services = copilot_module.parse_services(parsed.services)
+        services = copilot_module.parse_services(parsed.service)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
             return 1
 
         runner = copilot_module.CopilotRunner(prompt_file, services, parsed.branch)
-        return runner.run()
+        return await runner.run_direct()
 
     if parsed.command == "status":
         if not COPILOT_AVAILABLE:
@@ -600,7 +597,7 @@ async def async_main(args: Optional[list[str]] = None) -> int:
         # Determine platform
         platform = parsed.platform
 
-        services = copilot_module.parse_services(parsed.services)
+        services = copilot_module.parse_services(parsed.service)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
@@ -630,7 +627,7 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        services = copilot_module.parse_services(parsed.services)
+        services = copilot_module.parse_services(parsed.service)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
@@ -656,7 +653,7 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        services = copilot_module.parse_services(parsed.services)
+        services = copilot_module.parse_services(parsed.service)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
