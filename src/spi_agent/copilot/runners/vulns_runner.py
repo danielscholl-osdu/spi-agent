@@ -226,9 +226,9 @@ Do NOT include other providers or testing modules unless specified.
             self.output_lines.append(f"   ↪ Analyzing modules: {', '.join(modules_to_analyze)}")
             self.output_lines.append(f"   ↪ Scanning with Trivy (~30-60s)...")
 
+            # Initial update - let Live auto-refresh from here
             layout["status"].update(self.tracker.get_table())
             layout["output"].update(self._output_panel_renderable)
-            live.refresh()
 
             # Create a task for the agent call
             agent_task = asyncio.create_task(
@@ -238,13 +238,14 @@ Do NOT include other providers or testing modules unless specified.
             # Show progress while waiting
             start_time = time.time()
             last_update = start_time
+            update_count = 0
 
             while not agent_task.done():
                 await asyncio.sleep(0.5)  # Check every 500ms
 
                 elapsed = int(time.time() - start_time)
 
-                # Update status message every 2 seconds
+                # Update status message every 2 seconds (but let Live handle refreshing)
                 if time.time() - last_update >= 2:
                     status_messages = [
                         f"Scanning dependencies... ({elapsed}s)",
@@ -254,11 +255,16 @@ Do NOT include other providers or testing modules unless specified.
                     ]
                     msg = status_messages[(elapsed // 2) % len(status_messages)]
 
-                    # Update tracker (status table shows progress with elapsed time)
+                    # Update tracker (Live will auto-refresh at refresh_per_second rate)
+                    old_status = dict(self.tracker.services)
                     self.tracker.update(service, "scanning", msg)
 
-                    layout["status"].update(self.tracker.get_table())
-                    live.refresh()
+                    # Only update if status changed or every 10 iterations
+                    update_count += 1
+                    if old_status != self.tracker.services or update_count >= 10:
+                        layout["status"].update(self.tracker.get_table())
+                        update_count = 0
+
                     last_update = time.time()
 
             # Get the response
@@ -266,8 +272,6 @@ Do NOT include other providers or testing modules unless specified.
 
             # Update status to processing results
             self.tracker.update(service, "reporting", "Processing scan results...")
-            layout["status"].update(self.tracker.get_table())
-            live.refresh()
 
             # Parse response for vulnerability counts and CVE details
             response_str = str(response)
@@ -293,17 +297,15 @@ Do NOT include other providers or testing modules unless specified.
             self.full_output.append(response_str)
             self.full_output.append("")
 
-            # Update display with agent response
+            # Final update for this service (let Live handle the refresh)
             layout["output"].update(self._output_panel_renderable)
             layout["status"].update(self.tracker.get_table())
-            live.refresh()
 
             return response_str
 
         except Exception as e:
             self.tracker.update(service, "error", f"Failed: {str(e)[:50]}")
             layout["status"].update(self.tracker.get_table())
-            live.refresh()
             return f"Error analyzing {service}: {str(e)}"
 
     def parse_agent_response(self, service: str, response: str):
@@ -1026,7 +1028,6 @@ Do NOT include other providers or testing modules unless specified.
 
         try:
             # Run with Live display
-            # Reduced refresh rate to minimize screen flicker (was 4)
             with Live(layout, console=console, refresh_per_second=2) as live:
                 # Run services in parallel (max 2 at a time to avoid overwhelming display)
                 from asyncio import Semaphore, gather
@@ -1038,10 +1039,9 @@ Do NOT include other providers or testing modules unless specified.
                     async with semaphore:
                         self.full_output.append(f"Starting vulnerability scan for {service}...")
 
-                        # Update display
+                        # Update display (let Live auto-refresh)
                         layout["output"].update(self._output_panel_renderable)
                         layout["status"].update(self.tracker.get_table())
-                        live.refresh()
 
                         # Run vulnerability scan for this service
                         response = await self.run_vulns_for_service(service, layout, live)
@@ -1059,12 +1059,10 @@ Do NOT include other providers or testing modules unless specified.
                 self.output_lines.append("✓ Scans complete for all services")
                 layout["output"].update(self._output_panel_renderable)
                 layout["status"].update(self.tracker.get_table())
-                live.refresh()
 
                 # Add CVE analysis message to output panel
                 self.output_lines.append(f"   ↪ Analyzing CVE findings...")
                 layout["output"].update(self._output_panel_renderable)
-                live.refresh()
 
                 # Analyze CVEs with agent (while still in Live context so output shows progress)
                 cve_analysis = await self._analyze_cves_with_agent()
@@ -1072,6 +1070,9 @@ Do NOT include other providers or testing modules unless specified.
                 # Add completion message to output panel
                 self.output_lines.append("✓ CVE analysis complete")
                 layout["output"].update(self._output_panel_renderable)
+                layout["status"].update(self.tracker.get_table())
+
+                # Final update BEFORE exiting Live context (like test runner)
                 live.refresh()
 
             # Post-processing outside Live context
