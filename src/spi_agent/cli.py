@@ -326,9 +326,53 @@ async def run_chat_mode(quiet: bool = False) -> int:
 
         thread = agent.agent.get_new_thread()
 
+        # Use prompt_toolkit for better terminal handling (backspace, arrows, history)
+        session = None
+        prompt_tokens = None
+        patch_stdout = None
+        try:
+            from prompt_toolkit import PromptSession
+            from prompt_toolkit.history import InMemoryHistory
+            from prompt_toolkit.styles import Style as PromptStyle
+            from prompt_toolkit.output import ColorDepth
+            from prompt_toolkit.formatted_text import FormattedText
+            from prompt_toolkit.patch_stdout import patch_stdout as pt_patch_stdout
+
+            # Create session with history and proper key bindings
+            session = PromptSession(
+                history=InMemoryHistory(),
+                style=PromptStyle.from_dict({
+                    'prompt': 'cyan bold',
+                }),
+                enable_history_search=True,
+                mouse_support=False,  # Disable mouse to avoid conflicts
+                color_depth=ColorDepth.TRUE_COLOR,
+            )
+            prompt_tokens = FormattedText([('class:prompt', 'You: ')])
+            patch_stdout = pt_patch_stdout
+            use_prompt_toolkit = True
+        except ImportError:
+            # Fallback to basic input if prompt_toolkit not available
+            use_prompt_toolkit = False
+            console.print("[dim]prompt_toolkit not available; using basic input (no color styling).[/dim]\n")
+
         while True:
             try:
-                query = console.input("[bold cyan]You:[/bold cyan] ").strip()
+                if use_prompt_toolkit:
+                    # Use prompt_toolkit's async prompt so arrow keys/history work consistently
+                    assert session is not None  # for type checkers
+                    assert prompt_tokens is not None
+                    assert patch_stdout is not None
+
+                    with patch_stdout(raw=True):
+                        query = await session.prompt_async(prompt_tokens)
+                    query = query.strip()
+                else:
+                    # Fallback to standard input running in a background thread so
+                    # readline-based editing (arrows, backspace) remains usable.
+                    prompt_text = "You: "
+                    query = await asyncio.to_thread(input, prompt_text)
+                    query = query.strip()
 
                 if not query:
                     continue
