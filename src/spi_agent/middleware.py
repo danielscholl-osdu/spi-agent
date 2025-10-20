@@ -27,15 +27,24 @@ async def logging_function_middleware(
     - OpenTelemetry tracing for observability
     - Execution duration metrics
     - Error tracking
+    - Real-time activity updates for console display
 
     Args:
         context: Function invocation context containing tool name, arguments, and result
         next: Next middleware or the actual function execution
     """
+    # Import activity tracker
+    from spi_agent.activity import get_activity_tracker
+
     # Pre-processing: Log before function execution
     tool_name = context.function.name if hasattr(context.function, "name") else str(context.function)
 
     logger.info(f"[Tool Call] {tool_name}")
+
+    # Update console activity tracker
+    activity_tracker = get_activity_tracker()
+    formatted_name = activity_tracker.format_tool_name(tool_name)
+    await activity_tracker.update(f"🔧 {formatted_name}...")
 
     # Log arguments at debug level (can be verbose)
     if hasattr(context, "arguments") and context.arguments:
@@ -63,12 +72,19 @@ async def logging_function_middleware(
             # Continue to next middleware or function execution
             await next(context)
 
+            # Update activity tracker on success
+            await activity_tracker.update(f"✓ {formatted_name}")
+
         except Exception as e:
             # Track errors
             status = "error"
             span.set_attribute("error", True)
             span.set_attribute("error.message", str(e))
             logger.error(f"[Tool Error] {tool_name}: {str(e)}")
+
+            # Update activity tracker on error
+            await activity_tracker.update(f"✗ {formatted_name} failed")
+
             raise
 
         finally:
@@ -97,14 +113,22 @@ async def logging_chat_middleware(
     - Structured logging of message counts
     - OpenTelemetry tracing
     - Request/response logging at debug level
+    - Real-time activity updates for console display
 
     Args:
         context: Chat context containing messages and model configuration
         next: Next middleware or the actual LLM service call
     """
+    # Import activity tracker
+    from spi_agent.activity import get_activity_tracker
+
     # Pre-processing: Log before AI call
     message_count = len(context.messages) if hasattr(context, "messages") else 0
     logger.info(f"[LLM Request] {message_count} messages")
+
+    # Update console activity tracker
+    activity_tracker = get_activity_tracker()
+    await activity_tracker.update("🤖 Thinking with AI...")
 
     # Log last message at debug level (usually the user query)
     if hasattr(context, "messages") and context.messages:
@@ -132,6 +156,9 @@ async def logging_chat_middleware(
             span.set_attribute("llm.duration", duration)
 
             logger.info(f"[LLM Response] Received ({duration:.2f}s)")
+
+            # Update activity tracker on success
+            await activity_tracker.update("✓ AI response received")
 
             # Log response at debug level
             if hasattr(context, "response") and context.response:

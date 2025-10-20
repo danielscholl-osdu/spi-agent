@@ -391,8 +391,38 @@ async def run_chat_mode(quiet: bool = False) -> int:
                         console.print(f"\n[red]{error}[/red]\n")
                     continue
 
-                with console.status("[bold blue]Agent thinking...[/bold blue]", spinner="dots"):
+                # Use dynamic status display that updates based on agent activity
+                from spi_agent.activity import get_activity_tracker
+
+                activity_tracker = get_activity_tracker()
+
+                # Create async task to update status dynamically
+                status_handle = console.status("[bold blue]Starting...[/bold blue]", spinner="dots")
+                status_handle.start()
+
+                async def update_status():
+                    """Background task to poll activity tracker and update status."""
+                    try:
+                        while True:
+                            activity = activity_tracker.get_current()
+                            status_handle.update(f"[bold blue]{activity}[/bold blue]")
+                            await asyncio.sleep(0.1)  # Update 10x per second
+                    except asyncio.CancelledError:
+                        pass
+
+                # Start background status updater
+                update_task = asyncio.create_task(update_status())
+
+                try:
                     result = await agent.agent.run(query, thread=thread)
+                finally:
+                    # Stop status updater and clear status line
+                    update_task.cancel()
+                    try:
+                        await update_task
+                    except asyncio.CancelledError:
+                        pass
+                    status_handle.stop()
 
                 result_text = str(result) if not isinstance(result, str) else result
 

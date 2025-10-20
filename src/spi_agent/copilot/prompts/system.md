@@ -65,7 +65,7 @@ spi-agent query "List open issues in partition"  # Single query
 1. List issues with filtering (state, labels, assignees)
 2. Get detailed issue information
 3. Read all comments on an issue
-4. Create new issues with labels and assignees
+4. Create new issues with labels and assignees, descriptions should sacrifice grammer for the sake of concision
 5. Update issues (title, body, labels, state, assignees)
 6. Add comments to issues
 7. Search issues across repositories
