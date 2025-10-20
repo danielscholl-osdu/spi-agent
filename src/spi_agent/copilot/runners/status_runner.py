@@ -1,42 +1,28 @@
-"""Status runner for gathering GitHub repository information."""
+"""Status runner for gathering GitHub/GitLab repository information using direct API calls."""
 
 import json
 import logging
-import os
-import re
-import select
-import subprocess
-import textwrap
-import time
 from datetime import datetime
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
-from pydantic import ValidationError
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 
 from spi_agent.copilot.base import BaseRunner
 from spi_agent.copilot.base.runner import console
-from spi_agent.copilot.config import config
-from spi_agent.copilot.constants import SERVICES
-from spi_agent.copilot.models import StatusResponse
-from spi_agent.copilot.trackers import StatusTracker
 
 logger = logging.getLogger(__name__)
 
 
 class StatusRunner(BaseRunner):
-    """Runs Copilot CLI to gather GitHub/GitLab status and displays results"""
+    """Direct API client for gathering GitHub/GitLab status"""
 
-    def __init__(self, prompt_file: Union[Path, Traversable], services: List[str], providers: Optional[List[str]] = None):
+    def __init__(self, prompt_file: Optional[Union[Path, Traversable]], services: List[str], providers: Optional[List[str]] = None):
         self.providers = providers  # Optional providers for GitLab filtering (must be set before super().__init__)
-        super().__init__(prompt_file, services)
-        self.raw_output = []  # Keep full output for JSON extraction
-        self.tracker = StatusTracker(services)
-        self.log_handle = None  # File handle for incremental logging
+        # Pass dummy path since we don't use prompts in direct API mode
+        super().__init__(prompt_file or Path("/dev/null"), services)
 
     @property
     def log_prefix(self) -> str:
@@ -47,205 +33,20 @@ class StatusRunner(BaseRunner):
         return "status"
 
     def load_prompt(self) -> str:
-        """Load and augment prompt with arguments"""
-        prompt = self.prompt_file.read_text(encoding="utf-8")
-
-        # Replace organization placeholder with actual value from config
-        prompt = prompt.replace("{{ORGANIZATION}}", config.organization)
-
-        # Inject services argument
-        services_arg = ",".join(self.services)
-        augmented = f"{prompt}\n\nARGUMENTS:\nSERVICES: {services_arg}"
-
-        # Inject providers argument if specified (for GitLab status)
-        if self.providers:
-            providers_arg = ",".join(self.providers)
-            augmented += f"\nPROVIDERS: {providers_arg}"
-
-        return augmented
+        """Load prompt (not used in direct API mode)."""
+        return ""
 
     def parse_output(self, line: str) -> None:
-        """Parse copilot output to track which services are being queried"""
-        line_lower = line.lower()
-        line_stripped = line.strip()
+        """Parse output (not used in direct API mode)."""
+        pass
 
-        # Detect task patterns - with or without ✓ marker
-        for service in self.services:
-            if service in line_lower:
-                current_status = self.tracker.services[service]["status"]
-
-                # Extract task description (remove ✓ if present)
-                task_desc = line_stripped
-                if task_desc.startswith("✓"):
-                    task_desc = task_desc[1:].strip()
-                task_desc_lower = task_desc.lower()
-
-                # Match task patterns - check for "Get {service} {data_type}"
-                # Examples: "Get partition issues", "Get legal pull requests", etc.
-                if task_desc.startswith(("Get ", "Check ")):
-                    # This is a task line (with or without ✓)
-                    if "check" in task_desc_lower and "repository" in task_desc_lower:
-                        self.tracker.update(service, "querying", "Checking repository")
-                    elif "issue" in task_desc_lower:
-                        self.tracker.update(service, "querying", "Getting issues")
-                    elif "pull request" in task_desc_lower or "pull_request" in task_desc_lower:
-                        self.tracker.update(service, "querying", "Getting pull requests")
-                    elif "workflow" in task_desc_lower:
-                        self.tracker.update(service, "querying", "Getting workflows")
-
-                # Also catch lines that start with ✓ but don't start with Get/Check
-                elif line_stripped.startswith("✓"):
-                    if "issue" in task_desc_lower and "get" in task_desc_lower:
-                        self.tracker.update(service, "querying", "Getting issues")
-                    elif "pull" in task_desc_lower and "get" in task_desc_lower:
-                        self.tracker.update(service, "querying", "Getting pull requests")
-                    elif "workflow" in task_desc_lower and "get" in task_desc_lower:
-                        self.tracker.update(service, "querying", "Getting workflows")
-
-                # Detect narrative updates
-                if "gathering data for" in line_lower or "querying" in line_lower:
-                    self.tracker.update(service, "querying", "Gathering data")
-                elif "completed" in line_lower and "successfully" in line_lower:
-                    self.tracker.update(service, "gathered", "Data collected")
-                elif "error" in line_lower or "failed" in line_lower:
-                    if "check" not in line_lower:  # Ignore "checking for errors"
-                        self.tracker.update(service, "error", "Failed to gather data")
-
-    def extract_json(self, output: str) -> Optional[Dict]:
-        """Extract JSON from copilot output (may be wrapped in markdown or shell commands)"""
-        # First check for heredoc patterns (cat << 'EOF' ... EOF)
-        heredoc_match = re.search(r"cat\s*<<\s*['\"]?EOF['\"]?\s*\n(.*?)\n\s*EOF", output, re.DOTALL)
-        if heredoc_match:
-            data = self._parse_json_candidate(heredoc_match.group(1), "heredoc")
-            if data:
-                return data
-
-        # Check for $ cat << 'EOF' pattern with indentation
-        shell_heredoc = re.search(r"\$\s*cat\s*<<\s*['\"]?EOF['\"]?\s*\n(.*?)\n\s*EOF", output, re.DOTALL)
-        if shell_heredoc:
-            data = self._parse_json_candidate(shell_heredoc.group(1), "shell heredoc")
-            if data:
-                return data
-
-        # Check for JSON preceded by a bullet point (●)
-        bullet_json = re.search(r'●\s*(\{.*?\n\s*\})', output, re.DOTALL)
-        if bullet_json:
-            data = self._parse_json_candidate(bullet_json.group(1), "bullet point JSON")
-            if data:
-                return data
-
-        # Prefer explicit JSON code fences if present
-        code_blocks = re.findall(r'```(?:json)?\s*\n(.*?)\n\s*```', output, re.DOTALL)
-        for block in code_blocks:
-            data = self._parse_json_candidate(block, "code fence")
-            if data:
-                return data
-
-        # Fallback: scan for the first balanced JSON object in the output
-        data = self._scan_for_json_object(output, "brace scan")
-        if data:
-            return data
-
-        # Backwards compatibility: look for a block that clearly contains services/projects data
-        json_match = re.search(r'(\{[\s\S]*?"(?:services|projects)"[\s\S]*?\})\s*$', output, re.MULTILINE)
-        if json_match:
-            data = self._parse_json_candidate(json_match.group(1), '"services/projects" fallback')
-            if data:
-                return data
-
-        # Last resort: treat entire output as JSON
-        data = self._parse_json_candidate(output, "entire output")
-        if data:
-            return data
-
-        logger.warning("Could not extract JSON from any known format")
-        return None
-
-    def _parse_json_candidate(self, candidate: str, context: str) -> Optional[Dict]:
-        """Attempt to load a JSON object, repairing wrapped strings if needed."""
-        candidate = textwrap.dedent(candidate).strip()
-        if not candidate:
-            return None
-
-        attempts = [candidate]
-        repaired = self._fix_wrapped_strings(candidate)
-        if repaired != candidate:
-            attempts.append(repaired)
-
-        last_error: Optional[json.JSONDecodeError] = None
-        for attempt in attempts:
-            try:
-                data = json.loads(attempt)
-                if isinstance(data, dict):
-                    return data
-            except json.JSONDecodeError as exc:
-                last_error = exc
-
-        if last_error:
-            logger.debug(f"{context} JSON parse failed: {last_error}")
-        return None
-
-    @staticmethod
-    def _fix_wrapped_strings(text: str) -> str:
-        """Collapse soft-wrapped lines inside JSON string literals."""
-        result: List[str] = []
-        in_string = False
-        escape = False
-        i = 0
-        length = len(text)
-
-        while i < length:
-            ch = text[i]
-
-            if in_string:
-                if escape:
-                    result.append(ch)
-                    escape = False
-                elif ch == '\\':
-                    result.append(ch)
-                    escape = True
-                elif ch == '"':
-                    result.append(ch)
-                    in_string = False
-                elif ch == '\n':
-                    result.append(' ')
-                    i += 1
-                    while i < length and text[i] in (' ', '\t'):
-                        i += 1
-                    continue
-                else:
-                    result.append(ch)
-            else:
-                if ch == '"':
-                    in_string = True
-                result.append(ch)
-
-            if not in_string and ch != '\\':
-                escape = False
-
-            i += 1
-
-        return ''.join(result)
-
-    def _scan_for_json_object(self, text: str, context: str) -> Optional[Dict]:
-        """Search for a balanced JSON object within arbitrary text."""
-        start = text.find('{')
-        while start != -1:
-            brace_count = 0
-            for idx in range(start, len(text)):
-                char = text[idx]
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        chunk = text[start:idx + 1]
-                        data = self._parse_json_candidate(chunk, context)
-                        if data:
-                            return data
-                        break
-            start = text.find('{', start + 1)
-        return None
+    def get_results_panel(self, return_code: int) -> Panel:
+        """Generate results panel (not used in direct API mode)."""
+        return Panel(
+            "Status displayed above",
+            title="✓ Status Complete" if return_code == 0 else "✗ Status Failed",
+            border_style="green" if return_code == 0 else "red"
+        )
 
     def display_status(self, data: Dict):
         """Display GitHub/GitLab status in beautiful Rich format"""
@@ -955,436 +756,47 @@ class StatusRunner(BaseRunner):
 
     async def run_direct(self) -> int:
         """Execute direct Python API calls for fast status gathering."""
-        import asyncio
         from spi_agent.config import AgentConfig
-        from spi_agent.gitlab.direct_client import GitLabDirectClient
+
+        # Determine which platform based on providers
+        is_gitlab = self.providers is not None
+
+        if is_gitlab:
+            from spi_agent.gitlab.direct_client import GitLabDirectClient
+            spinner_msg = "[bold blue]Fetching GitLab data...[/bold blue]"
+        else:
+            from spi_agent.github.direct_client import GitHubDirectClient
+            spinner_msg = "[bold blue]Fetching GitHub data...[/bold blue]"
 
         self.show_config()
-        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
 
-        # Create direct client with AgentConfig (has GitLab settings)
+        # Create appropriate direct client
         agent_config = AgentConfig()
-        direct_client = GitLabDirectClient(agent_config)
-
-        # Open log file
-        try:
-            self.log_handle = open(self.log_file, "w", buffering=1)
-            self.log_handle.write(f"{'='*70}\n")
-            self.log_handle.write("GitLab Status Check (Direct API)\n")
-            self.log_handle.write(f"{'='*70}\n")
-            self.log_handle.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            self.log_handle.write(f"Services: {', '.join(self.services)}\n")
-            self.log_handle.write(f"Providers: {', '.join(self.providers or [])}\n")
-            self.log_handle.write(f"{'='*70}\n\n")
-            self.log_handle.flush()
-        except Exception as e:
-            logger.error(f"Failed to open log file: {e}")
-            self.log_handle = None
+        if is_gitlab:
+            direct_client = GitLabDirectClient(agent_config)
+        else:
+            direct_client = GitHubDirectClient(agent_config)
 
         try:
             # Fetch all status data in parallel (fast!)
-            with console.status("[bold blue]Fetching GitLab data...[/bold blue]", spinner="dots"):
-                status_data = await direct_client.get_all_status(
-                    self.services,
-                    self.providers or ["Azure", "Core"]
-                )
+            with console.status(spinner_msg, spinner="dots"):
+                if is_gitlab:
+                    status_data = await direct_client.get_all_status(
+                        self.services,
+                        self.providers or ["Azure", "Core"]
+                    )
+                else:
+                    status_data = await direct_client.get_all_status(self.services)
 
             console.print()
 
             # Display the results using existing display method
             self.display_status(status_data)
 
-            # Save log
-            if self.log_handle:
-                import json
-                self.log_handle.write("\n=== STATUS DATA ===\n")
-                self.log_handle.write(json.dumps(status_data, indent=2))
-                self.log_handle.write(f"\n\n{'='*70}\n")
-                self.log_handle.write(f"Status retrieved at: {status_data.get('timestamp')}\n")
-                self.log_handle.write(f"Log saved to: {self.log_file}\n")
-                self.log_handle.close()
-
-            console.print(f"\n[green]✓[/green] Log saved to: {self.log_file}")
-
             return 0
 
         except Exception as e:
             console.print(f"[red]Error:[/red] {e}", style="bold red")
             logger.error(f"Direct mode error: {e}", exc_info=True)
-            if self.log_handle:
-                self.log_handle.write(f"\nERROR: {e}\n")
-                self.log_handle.close()
             return 1
 
-    def run(self) -> int:
-        """Execute copilot to gather status with live output and process monitoring"""
-        global current_process
-
-        self.show_config()
-        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
-
-        prompt_content = self.load_prompt()
-
-        # Use model from environment or default to Claude Sonnet 4.5
-        model = os.getenv("SPI_AGENT_COPILOT_MODEL", "claude-sonnet-4.5")
-        command = ["copilot", "--model", model, "-p", prompt_content, "--allow-all-tools"]
-
-        # Open log file for incremental writes
-        try:
-            self.log_handle = open(self.log_file, "w", buffering=1)  # Line buffering
-            # Write header
-            self.log_handle.write(f"{'='*70}\n")
-            self.log_handle.write("Copilot Status Check Log (Streaming)\n")
-            self.log_handle.write(f"{'='*70}\n")
-            self.log_handle.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            self.log_handle.write(f"Services: {', '.join(self.services)}\n")
-            self.log_handle.write(f"{'='*70}\n\n")
-            self.log_handle.write("=== RAW OUTPUT (streaming) ===\n\n")
-            self.log_handle.flush()
-        except Exception as e:
-            logger.error(f"Failed to open log file: {e}")
-            self.log_handle = None
-
-        try:
-            # Start process with streaming output
-            # Redirect stderr to stdout to avoid blocking issues
-            # Explicitly pass environment to ensure GitLab token is available
-            env = os.environ.copy()
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,  # Prevent copilot from waiting for user input
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Merge stderr into stdout to prevent deadlock
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
-                env=env,  # Pass full environment including GITLAB_TOKEN
-            )
-
-            # Set global process for signal handler
-            current_process = process
-
-            # Log process start
-            logger.info(f"Started copilot process PID={process.pid}")
-            debug_msg = f"[DEBUG] Started copilot process PID={process.pid}"
-            self._write_to_log(debug_msg)
-
-            # Create split layout
-            layout = self.create_layout()
-            layout["status"].update(self.tracker.get_table())
-            layout["output"].update(self._output_panel_renderable)
-
-            # Live display with split view
-            with Live(layout, console=console, refresh_per_second=4, transient=False) as live:
-                # Enhanced output reading with process monitoring
-                self._read_output_with_monitoring(process, layout)
-
-                # Final process wait (should already be done, but just in case)
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    logger.warning("Process did not exit after output reading completed, terminating")
-                    process.terminate()
-                    process.wait(timeout=2)
-
-                # Log completion
-                logger.info(f"Process exited with return code: {process.returncode}")
-                debug_msg = f"[DEBUG] Process exited with return code: {process.returncode}"
-                self._write_to_log(debug_msg)
-
-                # Mark any remaining services as gathered (if copilot succeeded)
-                if process.returncode == 0:
-                    for service in self.services:
-                        if self.tracker.services[service]["status"] in ["pending", "querying"]:
-                            self.tracker.update(service, "gathered", "Data collected")
-                    # Note: Don't call live.refresh() here - it interferes with transient cleanup
-
-            console.print()  # Add spacing after Live context exits
-
-            if process.returncode != 0:
-                console.print(f"[red]Error:[/red] Copilot failed with exit code {process.returncode}")
-                return process.returncode
-
-            # Extract and parse JSON from full output
-            full_output = "\n".join(self.raw_output)
-
-            # Save raw output for debugging
-            raw_debug_file = Path("/tmp/copilot_status_raw.txt")
-            try:
-                with open(raw_debug_file, "w") as f:
-                    f.write(full_output)
-                logger.info(f"Saved raw output to {raw_debug_file}")
-                debug_msg = f"[DEBUG] Saved raw output to {raw_debug_file}"
-                self._write_to_log(debug_msg)
-            except Exception as e:
-                logger.warning(f"Could not save raw output: {e}")
-
-            status_data = self.extract_json(full_output)
-
-            if not status_data:
-                console.print("[red]Error:[/red] Could not extract JSON from copilot output")
-                logger.error("Could not extract JSON from copilot output")
-                logger.debug(f"Raw output (first 2000 chars): {full_output[:2000]}")
-                logger.debug(f"Total output length: {len(full_output)} chars")
-                logger.debug(f"Output ends with: ...{full_output[-200:]}")
-                return 1
-
-            # Validate JSON with Pydantic
-            try:
-                validated_data = StatusResponse(**status_data)
-                logger.info("Data validated successfully")
-
-                # Convert back to dict for display (with validated data)
-                status_data = validated_data.model_dump()
-
-            except ValidationError as e:
-                logger.warning(f"Data validation failed, using raw data. Errors: {e.error_count()} field(s)")
-                # Continue with raw data
-
-            # Display the results
-            self.display_status(status_data)
-
-            # Save execution log
-            self._save_log(process.returncode, status_data)
-
-            return 0
-
-        except FileNotFoundError:
-            console.print(
-                "[red]Error:[/red] 'copilot' command not found. Is GitHub Copilot CLI installed?",
-                style="bold red",
-            )
-            return 1
-        except Exception as e:
-            console.print(f"[red]Error:[/red] {e}", style="bold red")
-            import traceback
-            traceback.print_exc()
-            return 1
-        finally:
-            # Close log file if open
-            if self.log_handle and not self.log_handle.closed:
-                try:
-                    self.log_handle.write(f"\n\n{'='*70}\n")
-                    self.log_handle.write(f"Log closed at: {datetime.now().isoformat()}\n")
-                    self.log_handle.close()
-                except Exception as e:
-                    logger.warning(f"Error closing log file: {e}")
-
-            # Clear global process reference
-            current_process = None
-
-    def _read_output_with_monitoring(self, process: subprocess.Popen, layout) -> None:
-        """
-        Read process output with monitoring to prevent hanging.
-
-        Uses select() to check for available data and polls process status
-        to detect when the process exits, even if stdout isn't properly closed.
-
-        Implements a hard timeout to prevent indefinite hangs.
-
-        Args:
-            process: The subprocess to monitor
-            layout: Rich layout for updating UI
-        """
-        if not process.stdout:
-            logger.warning("No stdout available from process")
-            debug_msg = "[DEBUG] No stdout available from process"
-            self._write_to_log(debug_msg)
-            return
-
-        logger.info("Starting output reading loop")
-        debug_msg = "[DEBUG] Starting output reading loop"
-        self._write_to_log(debug_msg)
-
-        # Timeout configuration
-        start_time = time.time()
-        max_timeout = 600  # 10 minutes hard timeout (increased for downstream pipeline jobs)
-        last_output_time = time.time()
-        output_timeout = 30  # Seconds of silence before logging a warning
-        line_count = 0
-        poll_interval = 0.5  # Check for output every 0.5 seconds
-
-        # Main reading loop: continue while process is running
-        while process.poll() is None:
-            # Check for hard timeout
-            elapsed = time.time() - start_time
-            if elapsed > max_timeout:
-                logger.error(f"Copilot process exceeded {max_timeout}s timeout, terminating")
-                error_msg = f"[ERROR] Process exceeded {max_timeout}s timeout (elapsed: {elapsed:.1f}s)"
-                self._write_to_log(error_msg)
-
-                # Graceful termination
-                console.print(f"\n[red]Timeout:[/red] Copilot exceeded {max_timeout}s limit, terminating gracefully...")
-                process.terminate()
-
-                # Give it 10 seconds to cleanup
-                try:
-                    process.wait(timeout=10)
-                    logger.info("Process terminated gracefully")
-                    self._write_to_log("[DEBUG] Process terminated gracefully after timeout")
-                except subprocess.TimeoutExpired:
-                    logger.warning("Process did not terminate gracefully, forcing kill")
-                    self._write_to_log("[DEBUG] Process did not terminate gracefully, forcing kill")
-                    process.kill()
-                    process.wait()
-                    self._write_to_log("[DEBUG] Process killed forcefully")
-
-                break
-
-            # Use select to check if data is available (non-blocking)
-            try:
-                ready, _, _ = select.select([process.stdout], [], [], poll_interval)
-            except Exception as e:
-                logger.error(f"select() failed: {e}")
-                debug_msg = f"[DEBUG] select() failed: {e}"
-                self._write_to_log(debug_msg)
-                break
-
-            if ready:
-                # Data is available, read one line
-                try:
-                    line = process.stdout.readline()
-                    if not line:
-                        # EOF reached while process still running (unusual but possible)
-                        logger.info("EOF reached while process still running")
-                        debug_msg = "[DEBUG] EOF reached while process still running"
-                        self._write_to_log(debug_msg)
-                        break
-
-                    line = line.rstrip()
-                    if line:
-                        line_count += 1
-                        # Add to both buffers
-                        self.output_lines.append(line)
-                        self.raw_output.append(line)
-
-                        # Write to log file immediately
-                        self._write_to_log(line)
-
-                        # Parse for status updates
-                        self.parse_output(line)
-
-                        # Update both panels
-                        layout["status"].update(self.tracker.get_table())
-                        layout["output"].update(self._output_panel_renderable)
-
-                        # Reset timeout timer
-                        last_output_time = time.time()
-
-                        # Log progress periodically
-                        if line_count % 50 == 0:
-                            logger.debug(f"Read {line_count} lines so far")
-
-                except Exception as e:
-                    logger.error(f"Error reading line: {e}")
-                    debug_msg = f"[DEBUG] Error reading line: {e}"
-                    self._write_to_log(debug_msg)
-                    break
-            else:
-                # No data available, check for timeout
-                silence_duration = time.time() - last_output_time
-
-                if silence_duration > output_timeout:
-                    # Log warning but continue waiting
-                    logger.info(f"No output for {silence_duration:.0f}s, process still running (PID={process.pid})")
-                    debug_msg = f"[DEBUG] No output for {silence_duration:.0f}s, process still running"
-                    self._write_to_log(debug_msg)
-                    # Reset timer to avoid spamming logs
-                    last_output_time = time.time()
-
-        # Process has exited - log final status
-        logger.info(f"Process poll() returned {process.returncode}, draining remaining output")
-        debug_msg = f"[DEBUG] Process exited (returncode={process.returncode}), draining remaining output"
-        self._write_to_log(debug_msg)
-
-        # Drain any remaining output from stdout buffer
-        drained_lines = 0
-        try:
-            for line in process.stdout:
-                line = line.rstrip()
-                if line:
-                    drained_lines += 1
-                    self.output_lines.append(line)
-                    self.raw_output.append(line)
-                    self._write_to_log(line)
-                    self.parse_output(line)
-                    layout["status"].update(self.tracker.get_table())
-                    layout["output"].update(self._output_panel_renderable)
-        except Exception as e:
-            logger.warning(f"Error draining output: {e}")
-            debug_msg = f"[DEBUG] Error draining output: {e}"
-            self._write_to_log(debug_msg)
-
-        logger.info(f"Output reading complete. Total lines: {line_count}, drained: {drained_lines}")
-        debug_msg = f"[DEBUG] Output reading complete. Total lines: {line_count}, drained: {drained_lines}"
-        self._write_to_log(debug_msg)
-
-    def _write_to_log(self, line: str) -> None:
-        """Write a line to the log file immediately (incremental logging).
-
-        Args:
-            line: Line to write to the log file
-        """
-        if self.log_handle and not self.log_handle.closed:
-            try:
-                self.log_handle.write(line + "\n")
-                self.log_handle.flush()  # Ensure immediate write for tail -f
-            except Exception as e:
-                logger.warning(f"Error writing to log file: {e}")
-
-    def _save_log(self, return_code: int, status_data: Optional[Dict] = None):
-        """Append final metadata to the streaming log file.
-
-        Since raw output is already written incrementally during execution,
-        this method only appends the exit code and extracted JSON.
-        """
-        if not self.log_handle or self.log_handle.closed:
-            # Fallback: log file wasn't opened, write everything now
-            try:
-                with open(self.log_file, "w") as f:
-                    f.write(f"{'='*70}\n")
-                    f.write("Copilot Status Check Log (Post-mortem)\n")
-                    f.write(f"{'='*70}\n")
-                    f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                    f.write(f"Services: {', '.join(self.services)}\n")
-                    f.write(f"Exit Code: {return_code}\n")
-                    f.write(f"{'='*70}\n\n")
-                    f.write("=== RAW OUTPUT ===\n\n")
-                    f.write("\n".join(self.raw_output))
-                    if status_data:
-                        f.write("\n\n=== EXTRACTED JSON ===\n\n")
-                        f.write(json.dumps(status_data, indent=2))
-            except Exception as e:
-                console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
-                return
-
-        else:
-            # Normal case: append final sections to streaming log
-            try:
-                self.log_handle.write(f"\n\n{'='*70}\n")
-                self.log_handle.write(f"Exit Code: {return_code}\n")
-                self.log_handle.write(f"{'='*70}\n")
-
-                # Write extracted JSON if available
-                if status_data:
-                    self.log_handle.write("\n=== EXTRACTED JSON ===\n\n")
-                    self.log_handle.write(json.dumps(status_data, indent=2))
-                    self.log_handle.write("\n")
-
-                self.log_handle.flush()
-            except Exception as e:
-                logger.warning(f"Error appending to log file: {e}")
-
-        console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
-
-    def get_results_panel(self, return_code: int) -> Panel:
-        """Generate final results panel.
-
-        Note: StatusRunner uses display_status() for output instead of a single panel.
-        This method is required by BaseRunner but not used in StatusRunner's run() method.
-        """
-        return Panel(
-            "Status data displayed above",
-            title="✓ Status Check Complete" if return_code == 0 else "✗ Status Check Failed",
-            border_style="green" if return_code == 0 else "red"
-        )

@@ -18,14 +18,14 @@ class WorkflowResult:
     """Result from a workflow execution.
 
     Attributes:
-        workflow_type: Type of workflow (triage, test, status, fork)
+        workflow_type: Type of workflow (vulns, test, status, fork)
         timestamp: When the workflow was executed
         services: List of services processed
         status: Overall status (success, error, partial)
         summary: Brief summary of the workflow results
         detailed_results: Full structured data from workflow execution
-        vulnerabilities: Vulnerability counts by service (triage-specific)
-        cve_analysis: CVE analysis report (triage-specific)
+        vulnerabilities: Vulnerability counts by service (vulns-specific)
+        cve_analysis: CVE analysis report (vulns-specific)
         test_results: Test execution results (test-specific)
         pr_status: Pull request status information (status-specific)
         fork_status: Fork operation status (fork-specific)
@@ -143,7 +143,7 @@ class WorkflowResultStore:
             lines.append(f"**Summary:** {result.summary}")
 
             # Add workflow-specific details
-            if result.workflow_type == "triage" and result.vulnerabilities:
+            if result.workflow_type == "vulns" and result.vulnerabilities:
                 lines.append("")
                 lines.append("**Vulnerabilities Found:**")
                 for svc, counts in result.vulnerabilities.items():

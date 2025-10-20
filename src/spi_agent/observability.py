@@ -43,14 +43,14 @@ workflow_duration_histogram = meter.create_histogram(
     description="Duration of workflow execution in seconds",
 )
 
-# Triage-specific metrics
-triage_scans_counter = meter.create_counter(
-    "spi_agent.triage.scans.total",
-    description="Total number of triage scans performed",
+# Vulnerability analysis metrics
+vulns_scans_counter = meter.create_counter(
+    "spi_agent.vulns.scans.total",
+    description="Total number of vulnerability scans performed",
 )
 
-triage_vulnerabilities_counter = meter.create_counter(
-    "spi_agent.triage.vulnerabilities.total",
+vulns_vulnerabilities_counter = meter.create_counter(
+    "spi_agent.vulns.vulnerabilities.total",
     description="Total vulnerabilities found by severity",
 )
 
@@ -95,7 +95,7 @@ def record_workflow_run(
     """Record a workflow run metric.
 
     Args:
-        workflow_type: Type of workflow (triage, test, status, fork)
+        workflow_type: Type of workflow (vulns, test, status, fork)
         duration: Duration of the workflow in seconds
         status: Status of the workflow (success/error)
         service_count: Number of services processed
@@ -106,7 +106,7 @@ def record_workflow_run(
     workflow_duration_histogram.record(duration, {"workflow": workflow_type})
 
 
-def record_triage_scan(
+def record_vulns_scan(
     service: str,
     critical: int,
     high: int,
@@ -114,7 +114,7 @@ def record_triage_scan(
     low: int = 0,
     status: str = "success",
 ) -> None:
-    """Record triage scan metrics.
+    """Record vulnerability scan metrics.
 
     Args:
         service: Service that was scanned
@@ -124,17 +124,17 @@ def record_triage_scan(
         low: Number of low vulnerabilities
         status: Status of the scan (success/error)
     """
-    triage_scans_counter.add(1, {"service": service, "status": status})
+    vulns_scans_counter.add(1, {"service": service, "status": status})
 
     # Record vulnerability counts by severity
     if critical > 0:
-        triage_vulnerabilities_counter.add(critical, {"severity": "critical", "service": service})
+        vulns_vulnerabilities_counter.add(critical, {"severity": "critical", "service": service})
     if high > 0:
-        triage_vulnerabilities_counter.add(high, {"severity": "high", "service": service})
+        vulns_vulnerabilities_counter.add(high, {"severity": "high", "service": service})
     if medium > 0:
-        triage_vulnerabilities_counter.add(medium, {"severity": "medium", "service": service})
+        vulns_vulnerabilities_counter.add(medium, {"severity": "medium", "service": service})
     if low > 0:
-        triage_vulnerabilities_counter.add(low, {"severity": "low", "service": service})
+        vulns_vulnerabilities_counter.add(low, {"severity": "low", "service": service})
 
 
 def record_test_run(

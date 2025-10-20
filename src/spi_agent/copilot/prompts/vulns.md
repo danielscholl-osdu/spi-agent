@@ -11,12 +11,12 @@ ARGUMENTS:
 
 INSTRUCTIONS:
     1. Parse the SERVICES argument to determine which services to analyze
-    2. For each service, use the Maven MCP triage capability to:
+    2. For each service, use the Maven MCP vulnerability scanning capability to:
         a. Analyze project dependencies and version status
         b. Scan for security vulnerabilities using Trivy (if available)
         c. Correlate vulnerabilities with dependency versions
         d. Generate prioritized findings report
-    3. Extract key metrics from triage reports:
+    3. Extract key metrics from vulnerability scan reports:
         - Total dependencies scanned
         - Critical vulnerabilities (CVE IDs and CVSS scores)
         - High severity vulnerabilities

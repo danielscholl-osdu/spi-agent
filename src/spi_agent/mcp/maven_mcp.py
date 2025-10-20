@@ -104,7 +104,7 @@ class MavenMCPManager:
     Provides Maven dependency management capabilities including:
     - Version checking and update discovery
     - Security vulnerability scanning with Trivy
-    - Dependency triage and analysis
+    - Vulnerability analysis and analysis
     - Actionable remediation planning
     """
 

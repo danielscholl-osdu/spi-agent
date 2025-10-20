@@ -161,8 +161,8 @@ async def workflow_context_agent_middleware(
         next: Next middleware or the actual agent execution
 
     Example:
-        User executes /triage partition, then asks "What CVEs did you find?"
-        The middleware injects triage results before agent execution, allowing
+        User executes /vulns partition, then asks "What CVEs did you find?"
+        The middleware injects vulns results before agent execution, allowing
         the agent to answer with specific CVE details.
     """
     # Import here to avoid circular dependency
@@ -179,13 +179,13 @@ async def workflow_context_agent_middleware(
         enhanced_context = f"""{context_summary}
 
 **IMPORTANT INSTRUCTION:**
-When the user asks about recent workflow results (tests, triage, status, fork),
+When the user asks about recent workflow results (tests, vulns, status, fork),
 YOU MUST reference the workflow results shown above. DO NOT call GitHub tools
 to fetch information that is already available in these results.
 
 For example:
 - "what was the grade?" → Reference the Grade from Test Results above
-- "what CVEs did you find?" → Reference the Vulnerabilities from Triage results above
+- "what CVEs did you find?" → Reference the Vulnerabilities from vulnerability scan results above
 - "how many tests passed?" → Reference the Test Results above
 
 Always check this context FIRST before calling any tools."""

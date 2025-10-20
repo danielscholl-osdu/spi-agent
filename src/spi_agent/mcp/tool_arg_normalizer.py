@@ -21,7 +21,7 @@ def normalize_maven_tool_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
     This causes validation errors for BOTH string and array inputs.
 
     The server's default behavior (when these parameters are omitted) is actually
-    superior for our triage use case:
+    superior for our vulnerability analysis use case:
     - Scans ALL modules/profiles automatically
     - Includes ALL severity levels
     - Provides comprehensive module_summary for easy comparison

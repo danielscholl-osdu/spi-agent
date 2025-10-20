@@ -3,11 +3,11 @@
 from spi_agent.copilot.trackers.service_tracker import ServiceTracker
 from spi_agent.copilot.trackers.status_tracker import StatusTracker
 from spi_agent.copilot.trackers.test_tracker import TestTracker
-from spi_agent.copilot.trackers.triage_tracker import TriageTracker
+from spi_agent.copilot.trackers.vulns_tracker import VulnsTracker
 
 __all__ = [
     "ServiceTracker",
     "StatusTracker",
     "TestTracker",
-    "TriageTracker",
+    "VulnsTracker",
 ]

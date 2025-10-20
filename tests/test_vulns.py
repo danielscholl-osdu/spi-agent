@@ -1,19 +1,19 @@
-"""Tests for triage functionality (TriageRunner, TriageTracker)."""
+"""Tests for triage functionality (VulnsRunner, VulnsTracker)."""
 
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from spi_agent.copilot import TriageRunner, TriageTracker
+from spi_agent.copilot import VulnsRunner, VulnsTracker
 
 
-class TestTriageTracker:
-    """Tests for TriageTracker class."""
+class TestVulnsTracker:
+    """Tests for VulnsTracker class."""
 
     def test_initialization(self):
-        """Test TriageTracker initialization."""
+        """Test VulnsTracker initialization."""
         services = ["partition", "legal"]
-        tracker = TriageTracker(services)
+        tracker = VulnsTracker(services)
 
         assert len(tracker.services) == 2
         assert "partition" in tracker.services
@@ -31,7 +31,7 @@ class TestTriageTracker:
 
     def test_update_basic_status(self):
         """Test updating service status."""
-        tracker = TriageTracker(["partition"])
+        tracker = VulnsTracker(["partition"])
         tracker.update("partition", "analyzing", "Analyzing dependencies")
 
         assert tracker.services["partition"]["status"] == "analyzing"
@@ -40,7 +40,7 @@ class TestTriageTracker:
 
     def test_update_with_vulnerability_counts(self):
         """Test updating with vulnerability counts."""
-        tracker = TriageTracker(["partition"])
+        tracker = VulnsTracker(["partition"])
         tracker.update(
             "partition",
             "complete",
@@ -56,7 +56,7 @@ class TestTriageTracker:
 
     def test_update_with_dependencies(self):
         """Test updating with dependency count."""
-        tracker = TriageTracker(["partition"])
+        tracker = VulnsTracker(["partition"])
         tracker.update(
             "partition",
             "scanning",
@@ -68,7 +68,7 @@ class TestTriageTracker:
 
     def test_update_with_report_id(self):
         """Test updating with report ID."""
-        tracker = TriageTracker(["partition"])
+        tracker = VulnsTracker(["partition"])
         tracker.update(
             "partition",
             "complete",
@@ -80,7 +80,7 @@ class TestTriageTracker:
 
     def test_get_summary(self):
         """Test getting summary of all vulnerability counts."""
-        tracker = TriageTracker(["partition", "legal", "storage"])
+        tracker = VulnsTracker(["partition", "legal", "storage"])
         tracker.update("partition", "complete", "Done", critical=3, high=5, medium=12)
         tracker.update("legal", "complete", "Done", critical=0, high=2, medium=8)
         tracker.update("storage", "error", "Failed")
@@ -96,7 +96,7 @@ class TestTriageTracker:
 
     def test_get_table(self):
         """Test generating Rich table."""
-        tracker = TriageTracker(["partition", "legal"])
+        tracker = VulnsTracker(["partition", "legal"])
         tracker.update("partition", "complete", "Analysis complete", critical=3, high=5, medium=12)
         tracker.update("legal", "scanning", "Scanning for vulnerabilities")
 
@@ -107,7 +107,7 @@ class TestTriageTracker:
 
     def test_status_icons(self):
         """Test that different statuses have correct icons."""
-        tracker = TriageTracker(["partition"])
+        tracker = VulnsTracker(["partition"])
 
         status_icon_map = {
             "pending": "⏸",
@@ -124,8 +124,8 @@ class TestTriageTracker:
             assert tracker.services["partition"]["icon"] == expected_icon
 
 
-class TestTriageRunner:
-    """Tests for TriageRunner class."""
+class TestVulnsRunner:
+    """Tests for VulnsRunner class."""
 
     @pytest.fixture
     def mock_prompt_file(self, tmp_path):
@@ -148,9 +148,9 @@ class TestTriageRunner:
         return agent
 
     def test_initialization(self, mock_prompt_file, mock_agent):
-        """Test TriageRunner initialization."""
+        """Test VulnsRunner initialization."""
         services = ["partition", "legal"]
-        runner = TriageRunner(
+        runner = VulnsRunner(
             mock_prompt_file,
             services,
             mock_agent,
@@ -162,12 +162,12 @@ class TestTriageRunner:
         assert runner.agent == mock_agent
         assert runner.create_issue is False
         assert runner.severity_filter == ["critical", "high"]
-        assert isinstance(runner.tracker, TriageTracker)
+        assert isinstance(runner.tracker, VulnsTracker)
         assert runner.log_file.name.startswith("triage_")
 
     def test_initialization_with_defaults(self, mock_prompt_file, mock_agent):
-        """Test TriageRunner initialization with defaults."""
-        runner = TriageRunner(
+        """Test VulnsRunner initialization with defaults."""
+        runner = VulnsRunner(
             mock_prompt_file,
             ["partition"],
             mock_agent,
@@ -179,10 +179,10 @@ class TestTriageRunner:
 
     def test_load_prompt(self, mock_prompt_file, mock_agent):
         """Test prompt loading and augmentation."""
-        with patch("spi_agent.copilot.runners.triage_runner.config") as mock_config:
+        with patch("spi_agent.copilot.runners.vulns_runner.config") as mock_config:
             mock_config.organization = "test-org"
 
-            runner = TriageRunner(
+            runner = VulnsRunner(
                 mock_prompt_file,
                 ["partition"],
                 mock_agent,
@@ -198,7 +198,7 @@ class TestTriageRunner:
 
     def test_parse_agent_response_with_counts(self, mock_prompt_file, mock_agent):
         """Test parsing agent response with vulnerability counts."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         # Use the expected format: Critical: X, High: Y, Medium: Z
         response = "partition: Analysis complete - Critical: 3, High: 5, Medium: 12 vulnerabilities"
@@ -210,7 +210,7 @@ class TestTriageRunner:
 
     def test_parse_agent_response_with_dependencies(self, mock_prompt_file, mock_agent):
         """Test parsing agent response with dependency count."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         response = "Scanned 87 dependencies for partition service"
         runner.parse_agent_response("partition", response)
@@ -219,7 +219,7 @@ class TestTriageRunner:
 
     def test_parse_agent_response_with_report_id(self, mock_prompt_file, mock_agent):
         """Test parsing agent response with report ID."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         response = "Report-ID: partition-triage-2025-10-14"
         runner.parse_agent_response("partition", response)
@@ -228,7 +228,7 @@ class TestTriageRunner:
 
     def test_parse_agent_response_no_vulnerabilities(self, mock_prompt_file, mock_agent):
         """Test parsing agent response with no vulnerabilities."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         response = "Analysis complete - 0 critical, 0 high, 0 medium vulnerabilities"
         runner.parse_agent_response("partition", response)
@@ -241,7 +241,7 @@ class TestTriageRunner:
 
     def test_get_results_panel(self, mock_prompt_file, mock_agent):
         """Test results panel generation."""
-        runner = TriageRunner(mock_prompt_file, ["partition", "legal"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition", "legal"], mock_agent)
 
         # Set up some results
         runner.tracker.update("partition", "complete", "Analysis complete", critical=3, high=5, medium=12)
@@ -256,7 +256,7 @@ class TestTriageRunner:
 
     def test_get_results_panel_high_only(self, mock_prompt_file, mock_agent):
         """Test results panel with only high severity vulns."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         runner.tracker.update("partition", "complete", "Analysis complete", critical=0, high=5, medium=12)
 
@@ -269,7 +269,7 @@ class TestTriageRunner:
 
     def test_get_results_panel_clean(self, mock_prompt_file, mock_agent):
         """Test results panel with no vulnerabilities."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         runner.tracker.update("partition", "complete", "Analysis complete", critical=0, high=0, medium=0)
 
@@ -283,16 +283,16 @@ class TestTriageRunner:
     def test_log_file_naming(self, mock_prompt_file, mock_agent):
         """Test log file naming with multiple services."""
         # Single service
-        runner1 = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner1 = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
         assert "partition" in str(runner1.log_file)
 
         # Multiple services (<=3)
-        runner2 = TriageRunner(mock_prompt_file, ["partition", "legal", "schema"], mock_agent)
+        runner2 = VulnsRunner(mock_prompt_file, ["partition", "legal", "schema"], mock_agent)
         log_name = str(runner2.log_file)
         assert "partition-legal-schema" in log_name
 
         # Many services (>3)
-        runner3 = TriageRunner(
+        runner3 = VulnsRunner(
             mock_prompt_file,
             ["partition", "legal", "schema", "file", "storage"],
             mock_agent,
@@ -302,7 +302,7 @@ class TestTriageRunner:
 
     def test_show_config(self, mock_prompt_file, mock_agent):
         """Test configuration display."""
-        runner = TriageRunner(
+        runner = VulnsRunner(
             mock_prompt_file,
             ["partition"],
             mock_agent,
@@ -317,7 +317,7 @@ class TestTriageRunner:
     @pytest.mark.asyncio
     async def test_run_triage_for_service_success(self, mock_prompt_file, mock_agent):
         """Test running triage for a single service."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         # Mock agent response using the expected format (Critical: X, High: Y, Medium: Z)
         mock_agent.agent.run.return_value = (
@@ -342,7 +342,7 @@ class TestTriageRunner:
     @pytest.mark.asyncio
     async def test_run_triage_for_service_error(self, mock_prompt_file, mock_agent):
         """Test handling errors during triage."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         # Mock agent error
         mock_agent.agent.run.side_effect = Exception("MCP connection failed")
@@ -359,7 +359,7 @@ class TestTriageRunner:
 
     def test_extract_cve_details_with_package_header(self, mock_prompt_file, mock_agent):
         """Ensure CVE details parser handles package names after em dash."""
-        runner = TriageRunner(mock_prompt_file, ["partition"], mock_agent)
+        runner = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
 
         response = """
 1) CVE-2022-22965 — org.springframework:spring-beans (installed: 5.2.7.RELEASE)

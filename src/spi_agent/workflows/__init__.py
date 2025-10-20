@@ -29,7 +29,7 @@ def get_result_store() -> WorkflowResultStore:
         >>> from spi_agent.workflows import get_result_store
         >>> store = get_result_store()
         >>> await store.store(workflow_result)
-        >>> recent = await store.get_recent("triage", limit=1)
+        >>> recent = await store.get_recent("vulns", limit=1)
     """
     global _result_store
 

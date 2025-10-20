@@ -1,7 +1,7 @@
-"""Triage workflow using Microsoft Agent Framework.
+"""Vulnerability analysis workflow using Microsoft Agent Framework.
 
 This module provides MAF-based workflow orchestration for Maven dependency
-and vulnerability triage analysis.
+and vulnerability CVE scanning.
 """
 
 import asyncio
@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List
 
-from spi_agent.observability import record_triage_scan, record_workflow_run, tracer
+from spi_agent.observability import record_vulns_scan, record_workflow_run, tracer
 from spi_agent.workflows import WorkflowResult, get_result_store
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def run_triage_workflow(
+async def run_vulns_workflow(
     agent: "SPIAgent",
     services: List[str],
     severity_filter: List[str],
@@ -27,10 +27,10 @@ async def run_triage_workflow(
     include_testing: bool = False,
     create_issue: bool = False,
 ) -> WorkflowResult:
-    """Run triage workflow for specified services.
+    """Run vulnerability analysis workflow for specified services.
 
-    This function orchestrates the triage analysis workflow, including:
-    - Scanning services for vulnerabilities using Maven MCP
+    This function orchestrates the vulnerability scanning workflow, including:
+    - Scanning services for CVE vulnerabilities using Maven MCP
     - Analyzing CVEs across services
     - Storing results in WorkflowResultStore for agent context
     - Recording observability metrics
@@ -44,14 +44,14 @@ async def run_triage_workflow(
         create_issue: Whether to create GitHub tracking issues
 
     Returns:
-        WorkflowResult with triage analysis data
+        WorkflowResult with vulnerability analysis data
     """
     workflow_start = datetime.now()
     start_time = asyncio.get_event_loop().time()
 
-    logger.info(f"Starting triage workflow for services: {', '.join(services)}")
+    logger.info(f"Starting vulnerability analysis workflow for services: {', '.join(services)}")
 
-    with tracer.start_as_current_span("triage_workflow") as span:
+    with tracer.start_as_current_span("vulns_workflow") as span:
         span.set_attribute("services", ",".join(services))
         span.set_attribute("severity_filter", ",".join(severity_filter))
         span.set_attribute("create_issue", create_issue)
@@ -61,17 +61,17 @@ async def run_triage_workflow(
         detailed_results: Dict[str, Any] = {}
 
         try:
-            # Scan services (currently delegates to existing TriageRunner)
+            # Scan services (currently delegates to existing VulnsRunner)
             # In future iterations, this will use MAF Executors
-            from spi_agent.copilot.runners.triage_runner import TriageRunner
+            from spi_agent.copilot.runners.vulns_runner import VulnsRunner
 
             # Get prompt file
             from spi_agent.copilot import get_prompt_file
 
-            prompt_file = get_prompt_file("triage.md")
+            prompt_file = get_prompt_file("vulns.md")
 
             # Create runner
-            runner = TriageRunner(
+            runner = VulnsRunner(
                 prompt_file=prompt_file,
                 services=services,
                 agent=agent,
@@ -81,8 +81,8 @@ async def run_triage_workflow(
                 include_testing=include_testing,
             )
 
-            # Execute triage analysis
-            logger.info("Executing triage runner...")
+            # Execute vulnerability analysis
+            logger.info("Executing vulnerability analysis runner...")
             exit_code = await runner.run()
 
             # Extract results from runner
@@ -100,7 +100,7 @@ async def run_triage_workflow(
                 }
 
                 # Record observability metrics for each service
-                record_triage_scan(
+                record_vulns_scan(
                     service=service,
                     critical=critical,
                     high=high,
@@ -137,7 +137,7 @@ async def run_triage_workflow(
 
             # Create workflow result
             result = WorkflowResult(
-                workflow_type="triage",
+                workflow_type="vulns",
                 timestamp=workflow_start,
                 services=services,
                 status="success" if exit_code == 0 else "error",
@@ -150,12 +150,12 @@ async def run_triage_workflow(
             # Store result for agent context
             result_store = get_result_store()
             await result_store.store(result)
-            logger.info(f"Stored triage workflow result: {summary}")
+            logger.info(f"Stored vulnerability analysis workflow result: {summary}")
 
             # Record workflow metrics
             duration = asyncio.get_event_loop().time() - start_time
             record_workflow_run(
-                workflow_type="triage",
+                workflow_type="vulns",
                 duration=duration,
                 status="success" if exit_code == 0 else "error",
                 service_count=len(services),
@@ -167,17 +167,17 @@ async def run_triage_workflow(
             return result
 
         except Exception as e:
-            logger.error(f"Triage workflow failed: {e}")
+            logger.error(f"Vulnerability analysis workflow failed: {e}")
             span.set_attribute("error", True)
             span.set_attribute("error.message", str(e))
 
             # Create error result
             result = WorkflowResult(
-                workflow_type="triage",
+                workflow_type="vulns",
                 timestamp=workflow_start,
                 services=services,
                 status="error",
-                summary=f"Triage workflow failed: {str(e)[:100]}",
+                summary=f"Vulnerability analysis workflow failed: {str(e)[:100]}",
                 detailed_results={"error": str(e)},
                 vulnerabilities=vulnerabilities_by_service,
             )
@@ -189,7 +189,7 @@ async def run_triage_workflow(
             # Record failed workflow
             duration = asyncio.get_event_loop().time() - start_time
             record_workflow_run(
-                workflow_type="triage",
+                workflow_type="vulns",
                 duration=duration,
                 status="error",
                 service_count=len(services),
@@ -260,59 +260,6 @@ async def run_test_workflow(
     result_store = get_result_store()
     await result_store.store(result)
     logger.info(f"Stored test workflow result: {summary}")
-
-    return result
-
-
-async def run_status_workflow(services: List[str]) -> WorkflowResult:
-    """Run status workflow for specified services.
-
-    This is a placeholder for future MAF Workflow migration of StatusRunner.
-
-    Args:
-        services: List of service names to check
-
-    Returns:
-        WorkflowResult with status information
-    """
-    workflow_start = datetime.now()
-
-    logger.info(f"Status workflow for services: {', '.join(services)}")
-
-    # Placeholder: delegate to existing StatusRunner
-    from spi_agent.copilot import get_prompt_file
-    from spi_agent.copilot.runners.status_runner import StatusRunner
-
-    prompt_file = get_prompt_file("status.md")
-    runner = StatusRunner(prompt_file=prompt_file, services=services)
-    runner.run()
-
-    # Extract status information
-    pr_status_by_service: Dict[str, Dict[str, Any]] = {}
-    for service in services:
-        service_data = runner.tracker.services.get(service, {})
-        pr_status_by_service[service] = {
-            "open_prs": service_data.get("open_prs", 0),
-            "open_issues": service_data.get("open_issues", 0),
-            "status": service_data.get("status", "unknown"),
-        }
-
-    summary = f"Checked status for {len(services)} service(s)"
-
-    result = WorkflowResult(
-        workflow_type="status",
-        timestamp=workflow_start,
-        services=services,
-        status="success",
-        summary=summary,
-        detailed_results={},
-        pr_status=pr_status_by_service,
-    )
-
-    # Store result
-    result_store = get_result_store()
-    await result_store.store(result)
-    logger.info(f"Stored status workflow result: {summary}")
 
     return result
 

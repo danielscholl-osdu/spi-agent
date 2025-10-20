@@ -1,4 +1,4 @@
-"""Triage status tracker for Maven dependency and vulnerability analysis."""
+"""Vulnerability analysis tracker for Maven dependency and CVE scanning."""
 
 from typing import Any, Dict, List
 
@@ -8,13 +8,13 @@ from spi_agent.copilot.base import BaseTracker
 from spi_agent.copilot.constants import STATUS_ICONS
 
 
-class TriageTracker(BaseTracker):
-    """Tracks the status of triage analysis for services"""
+class VulnsTracker(BaseTracker):
+    """Tracks the status of vulnerability analysis for services"""
 
     @property
     def table_title(self) -> str:
         """Return the title for the status table."""
-        return "🔍 Triage Status"
+        return "🔍 Vulnerability Analysis Status"
 
     @property
     def status_icons(self) -> Dict[str, str]:

@@ -49,10 +49,10 @@ from spi_agent.copilot.models import (
 )
 
 # Import trackers
-from spi_agent.copilot.trackers import ServiceTracker, StatusTracker, TestTracker, TriageTracker
+from spi_agent.copilot.trackers import ServiceTracker, StatusTracker, TestTracker, VulnsTracker
 
 # Import runners
-from spi_agent.copilot.runners import CopilotRunner, StatusRunner, TestRunner, TriageRunner
+from spi_agent.copilot.runners import CopilotRunner, StatusRunner, TestRunner, VulnsRunner
 
 
 __all__ = [
@@ -61,9 +61,9 @@ __all__ = [
     "CopilotRunner",
     "StatusRunner",
     "TestRunner",
-    "TriageRunner",
+    "VulnsRunner",
     "TestTracker",
-    "TriageTracker",
+    "VulnsTracker",
     "parse_services",
     "get_prompt_file",
     "main",
@@ -120,10 +120,8 @@ Examples:
   %(prog)s status --services partition
   %(prog)s status --services partition,legal,entitlements
   %(prog)s status --services all
-
-  %(prog)s status-glab --projects partition
-  %(prog)s status-glab --projects partition,legal --provider azure
-  %(prog)s status-glab --projects all --provider azure,core
+  %(prog)s status --services partition --platform gitlab
+  %(prog)s status --services partition --platform gitlab --provider azure
         """,
     )
 
@@ -164,23 +162,31 @@ Available services:
     # Status command
     status_parser = subparsers.add_parser(
         "status",
-        help="Get GitHub status for OSDU SPI service repositories",
+        help="Get GitHub or GitLab status for OSDU SPI service repositories",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --services partition
-  %(prog)s --services partition,legal,entitlements
-  %(prog)s --services all
+  %(prog)s --services partition                          # GitHub (default)
+  %(prog)s --services partition,legal,entitlements       # Multiple repos
+  %(prog)s --services all                                # All repos
+  %(prog)s --services partition --platform gitlab        # GitLab
+  %(prog)s --services partition --platform gitlab --provider azure  # GitLab (azure only)
 
 Available services:
   partition, entitlements, legal, schema, file, storage,
   indexer, indexer-queue, search, workflow
 
-Information gathered:
+Information gathered (GitHub):
   - Open issues count and details
   - Pull requests (highlighting release PRs)
   - Recent workflow runs (Build, Test, CodeQL, etc.)
   - Workflow status (running, completed, failed)
+
+Information gathered (GitLab):
+  - Open issues filtered by provider labels
+  - Merge requests filtered by provider labels
+  - Recent pipeline runs (success, failed, running)
+  - Provider labels highlighted in output
         """,
     )
     status_parser.add_argument(
@@ -190,43 +196,16 @@ Information gathered:
         metavar="SERVICES",
         help="Service name(s): 'all', single name, or comma-separated list",
     )
-
-    # Status GitLab command
-    status_glab_parser = subparsers.add_parser(
-        "status-glab",
-        help="Get GitLab status for OSDU SPI service repositories",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s --projects partition
-  %(prog)s --projects partition,legal,entitlements
-  %(prog)s --projects all
-  %(prog)s --projects partition --provider azure
-  %(prog)s --projects all --provider azure,core
-
-Available projects:
-  partition, entitlements, legal, schema, file, storage,
-  indexer, indexer-queue, search, workflow
-
-Information gathered:
-  - Open issues filtered by provider labels
-  - Merge requests filtered by provider labels
-  - Recent pipeline runs (success, failed, running)
-  - Provider labels highlighted in output
-        """,
+    status_parser.add_argument(
+        "--platform",
+        choices=["github", "gitlab"],
+        default="github",
+        help="Platform to query (default: github)",
     )
-    status_glab_parser.add_argument(
-        "--projects",
-        "-p",
-        required=True,
-        metavar="PROJECTS",
-        help="Project name(s): 'all', single name, or comma-separated list",
-    )
-    status_glab_parser.add_argument(
+    status_parser.add_argument(
         "--provider",
-        default="Azure,Core",
         metavar="PROVIDERS",
-        help="Provider label(s) for filtering (default: Azure,Core)",
+        help="Provider label(s) for filtering (GitLab only, default: Azure,Core)",
     )
 
     # Custom error handling for better UX
@@ -275,14 +254,8 @@ Information gathered:
 
     # Handle status command
     if args.command == "status":
-        try:
-            prompt_file = get_prompt_file("status.md")
-        except FileNotFoundError as exc:
-            console.print(
-                f"[red]Error:[/red] {exc}",
-                style="bold red",
-            )
-            return 1
+        # Determine platform
+        platform = getattr(args, 'platform', 'github')
 
         # Parse services
         services = parse_services(args.services)
@@ -297,40 +270,17 @@ Information gathered:
             console.print(f"\n[cyan]Available services:[/cyan] {', '.join(SERVICES.keys())}")
             return 1
 
-        # Run status check
-        runner = StatusRunner(prompt_file, services)
-        return runner.run()
+        # Setup providers for GitLab
+        if platform == "gitlab":
+            provider_arg = getattr(args, 'provider', None) or "Azure,Core"
+            providers = [p.strip() for p in provider_arg.split(",")]
+            runner = StatusRunner(None, services, providers)
+        else:
+            runner = StatusRunner(None, services)
 
-    # Handle status-glab command
-    if args.command == "status-glab":
-        try:
-            prompt_file = get_prompt_file("status-glab.md")
-        except FileNotFoundError as exc:
-            console.print(
-                f"[red]Error:[/red] {exc}",
-                style="bold red",
-            )
-            return 1
-
-        # Parse projects
-        projects = parse_services(args.projects)
-
-        # Validate projects
-        invalid = [p for p in projects if p not in SERVICES]
-        if invalid:
-            console.print(
-                f"[red]Error:[/red] Invalid project(s): {', '.join(invalid)}",
-                style="bold red",
-            )
-            console.print(f"\n[cyan]Available projects:[/cyan] {', '.join(SERVICES.keys())}")
-            return 1
-
-        # Parse providers
-        providers = [p.strip() for p in args.provider.split(",")]
-
-        # Run GitLab status check using StatusRunner with providers
-        runner = StatusRunner(prompt_file, projects, providers)
-        return runner.run()
+        # Run status check using direct API mode (fast, no AI)
+        import asyncio
+        return asyncio.run(runner.run_direct())
 
     return 0
 

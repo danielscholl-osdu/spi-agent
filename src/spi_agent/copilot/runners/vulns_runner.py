@@ -1,4 +1,4 @@
-"""Triage runner for Maven dependency and vulnerability analysis."""
+"""Vulnerability analysis runner for Maven dependency and CVE scanning."""
 
 import asyncio
 import re
@@ -14,14 +14,14 @@ from rich.table import Table
 from spi_agent.copilot.base import BaseRunner
 from spi_agent.copilot.base.runner import console
 from spi_agent.copilot.config import config
-from spi_agent.copilot.trackers import TriageTracker
+from spi_agent.copilot.trackers import VulnsTracker
 
 if TYPE_CHECKING:
     from spi_agent import SPIAgent
 
 
-class TriageRunner(BaseRunner):
-    """Runs triage analysis using Maven MCP server with live output"""
+class VulnsRunner(BaseRunner):
+    """Runs vulnerability analysis using Maven MCP server with live output"""
 
     def __init__(
         self,
@@ -33,10 +33,10 @@ class TriageRunner(BaseRunner):
         providers: Optional[List[str]] = None,
         include_testing: bool = False,
     ):
-        """Initialize triage runner.
+        """Initialize vulnerability analysis runner.
 
         Args:
-            prompt_file: Path to triage prompt template
+            prompt_file: Path to vulnerability analysis prompt template
             services: List of service names to analyze
             agent: SPIAgent instance with MCP tools
             create_issue: Whether to create tracking issues for findings
@@ -50,12 +50,12 @@ class TriageRunner(BaseRunner):
         self.severity_filter = severity_filter  # None = all severities
         self.providers = providers or ["azure"]  # Default to azure
         self.include_testing = include_testing
-        self.tracker = TriageTracker(services)
+        self.tracker = VulnsTracker(services)
 
     @property
     def log_prefix(self) -> str:
         """Return log file prefix for this runner type."""
-        return "triage"
+        return "vulns"
 
     def _get_filter_instructions(self) -> str:
         """Generate filtering instructions based on provider/testing flags.
@@ -132,7 +132,7 @@ Do NOT include other providers or testing modules unless specified.
             return
 
         # Parse status indicators
-        if "analyzing" in line_lower or "triage" in line_lower or "dependencies" in line_lower:
+        if "analyzing" in line_lower or "vulns" in line_lower or "dependencies" in line_lower:
             self.tracker.update(target_service, "analyzing", "Analyzing dependencies")
         elif "scan" in line_lower or "vulnerabilities" in line_lower:
             self.tracker.update(target_service, "scanning", "Scanning for vulnerabilities")
@@ -171,8 +171,8 @@ Do NOT include other providers or testing modules unless specified.
                 )
 
 
-    async def run_triage_for_service(self, service: str, layout, live) -> str:
-        """Run triage analysis for a single service with live progress updates.
+    async def run_vulns_for_service(self, service: str, layout, live) -> str:
+        """Run vulnerability scan for a single service with live progress updates.
 
         Args:
             service: Service name to analyze
@@ -185,7 +185,7 @@ Do NOT include other providers or testing modules unless specified.
         import time
 
         # Update tracker
-        self.tracker.update(service, "analyzing", "Starting triage analysis")
+        self.tracker.update(service, "analyzing", "Starting vulnerability scan")
 
         # Load scan prompt template
         try:
@@ -217,7 +217,7 @@ Do NOT include other providers or testing modules unless specified.
             if self.include_testing:
                 modules_to_analyze.append("testing")
 
-            self.output_lines.append(f"Starting triage analysis for {service}...")
+            self.output_lines.append(f"Starting vulnerability scan for {service}...")
             self.output_lines.append(f"✓ Scan Java project")
             self.output_lines.append(f"   $ scan_java_project_tool")
             self.output_lines.append(f"     workspace: ./repos/{service}")
@@ -1036,15 +1036,15 @@ Do NOT include other providers or testing modules unless specified.
 
                 async def run_with_limit(service, svc_idx):
                     async with semaphore:
-                        self.full_output.append(f"Starting triage analysis for {service}...")
+                        self.full_output.append(f"Starting vulnerability scan for {service}...")
 
                         # Update display
                         layout["output"].update(self._output_panel_renderable)
                         layout["status"].update(self.tracker.get_table())
                         live.refresh()
 
-                        # Run triage for this service
-                        response = await self.run_triage_for_service(service, layout, live)
+                        # Run vulnerability scan for this service
+                        response = await self.run_vulns_for_service(service, layout, live)
 
                         # Store response for logs
                         self.full_output.append(response)
@@ -1086,7 +1086,7 @@ Do NOT include other providers or testing modules unless specified.
             return 0
 
         except Exception as e:
-            console.print(f"[red]Error executing triage:[/red] {e}", style="bold red")
+            console.print(f"[red]Error executing vulnerability scan:[/red] {e}", style="bold red")
             import traceback
             traceback.print_exc()
             return 1
@@ -1143,7 +1143,7 @@ Do NOT include other providers or testing modules unless specified.
     def get_results_panel(self, return_code: int) -> Panel:
         """Generate final results panel (required by base class).
 
-        Note: TriageRunner uses async run() which calls get_security_assessment_panel()
+        Note: VulnsRunner uses async run() which calls get_security_assessment_panel()
         directly, so this method is not actually used in normal execution.
 
         Args:

@@ -363,10 +363,10 @@ class TestWorkflowIntegration:
     """Integration tests for workflow functions."""
 
     @pytest.mark.asyncio
-    async def test_run_triage_workflow_integration(self):
+    async def test_run_vulns_workflow_integration(self):
         """Test triage workflow integration with result store."""
         from spi_agent.workflows import get_result_store
-        from spi_agent.workflows.triage_workflow import run_triage_workflow
+        from spi_agent.workflows.vulns_workflow import run_vulns_workflow
 
         # Mock agent
         mock_agent = Mock()
@@ -398,7 +398,7 @@ class TestWorkflowIntegration:
                 reset_result_store()
 
                 # Run workflow
-                result = await run_triage_workflow(
+                result = await run_vulns_workflow(
                     agent=mock_agent,
                     services=["partition"],
                     severity_filter=["critical", "high"],

@@ -83,7 +83,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         console.print(f"\n[yellow]Executing fork workflow for: {', '.join(services)}[/yellow]\n")
 
         # Use workflow function to store results for agent context
-        from spi_agent.workflows.triage_workflow import run_fork_workflow
+        from spi_agent.workflows.vulns_workflow import run_fork_workflow
 
         result = await run_fork_workflow(services=services, branch=branch)
 
@@ -98,68 +98,50 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
     if cmd == "status":
         if len(parts) < 2:
-            return "Usage: /status <services>\nExample: /status partition,legal"
+            return "Usage: /status <services> [--platform github|gitlab] [--provider <providers>]\nExamples:\n  /status partition\n  /status partition --platform gitlab --provider azure"
 
         services_arg = parts[1]
-        try:
-            prompt_file = copilot_module.get_prompt_file("status.md")
-        except FileNotFoundError as exc:  # pragma: no cover - packaging guard
-            return f"Error: {exc}"
+
+        # Parse --platform flag (default: github)
+        platform = "github"
+        if "--platform" in parts:
+            platform_idx = parts.index("--platform")
+            if platform_idx + 1 < len(parts):
+                platform = parts[platform_idx + 1].lower()
+                if platform not in ["github", "gitlab"]:
+                    return f"Error: Invalid platform '{platform}'. Use 'github' or 'gitlab'"
+
+        # Parse --provider flag (for GitLab)
+        providers = None
+        if "--provider" in parts:
+            provider_idx = parts.index("--provider")
+            if provider_idx + 1 < len(parts):
+                providers = parts[provider_idx + 1]
+
+        # Setup providers for GitLab
+        if platform == "gitlab" and providers is None:
+            providers = "Azure,Core"  # Default for GitLab
 
         services = copilot_module.parse_services(services_arg)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
-        console.print(f"\n[yellow]Checking status for: {', '.join(services)}[/yellow]\n")
+        # Display status message
+        if platform == "gitlab":
+            console.print(f"\n[yellow]Checking GitLab status for: {', '.join(services)} (providers: {providers})[/yellow]\n")
+            providers_list = [p.strip() for p in providers.split(",")]
+            runner = copilot_module.StatusRunner(None, services, providers_list)
+        else:
+            console.print(f"\n[yellow]Checking GitHub status for: {', '.join(services)}[/yellow]\n")
+            runner = copilot_module.StatusRunner(None, services)
 
-        # Use workflow function to store results for agent context
-        from spi_agent.workflows.triage_workflow import run_status_workflow
-
-        result = await run_status_workflow(services=services)
-
-        # Brief acknowledgment - agent will have access to full results via context injection
-        await agent.agent.run(
-            f"The status check just completed for {', '.join(services)}. "
-            f"You now have access to the status information. "
-            f"Acknowledge briefly and offer to help analyze the results.",
-            thread=thread,
-        )
-        return None
-
-    if cmd == "status-glab":
-        if len(parts) < 2:
-            return "Usage: /status-glab <projects> [--provider <providers>]\nExample: /status-glab partition --provider azure"
-
-        projects_arg = parts[1]
-        providers = "Azure,Core"  # Default providers (capitalized to match GitLab labels)
-
-        # Parse --provider flag
-        if "--provider" in parts:
-            provider_idx = parts.index("--provider")
-            if provider_idx + 1 < len(parts):
-                providers = parts[provider_idx + 1]
-
-        try:
-            prompt_file = copilot_module.get_prompt_file("status-glab.md")
-        except FileNotFoundError as exc:  # pragma: no cover - packaging guard
-            return f"Error: {exc}"
-
-        projects = copilot_module.parse_services(projects_arg)
-        invalid = [p for p in projects if p not in copilot_module.SERVICES]
-        if invalid:
-            return f"Error: Invalid project(s): {', '.join(invalid)}"
-
-        console.print(f"\n[yellow]Checking GitLab status for: {', '.join(projects)} (providers: {providers})[/yellow]\n")
-
-        # Run status-glab using StatusRunner with direct API mode
-        providers_list = [p.strip() for p in providers.split(",")]
-        runner = copilot_module.StatusRunner(prompt_file, projects, providers_list)
         await runner.run_direct()
 
         # Brief acknowledgment - results were already displayed
+        platform_name = "GitLab" if platform == "gitlab" else "GitHub"
         await agent.agent.run(
-            f"The GitLab status check just completed for {', '.join(projects)}. "
+            f"The {platform_name} status check just completed for {', '.join(services)}. "
             f"The results were displayed above. "
             f"Acknowledge briefly and offer to help analyze the status or address any issues.",
             thread=thread,
@@ -192,7 +174,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         console.print(f"\n[yellow]Running Maven tests for: {', '.join(services)} (provider: {provider})[/yellow]\n")
 
         # Use workflow function to store results for agent context
-        from spi_agent.workflows.triage_workflow import run_test_workflow
+        from spi_agent.workflows.vulns_workflow import run_test_workflow
 
         result = await run_test_workflow(services=services, provider=provider)
 
@@ -205,9 +187,9 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         )
         return None
 
-    if cmd == "triage":
+    if cmd == "vulns":
         if len(parts) < 2:
-            return "Usage: /triage <services> [--create-issue] [--severity LEVEL] [--providers PROVIDERS] [--include-testing]\nExample: /triage partition\nExample: /triage partition --providers azure,aws --include-testing"
+            return "Usage: /vulns <services> [--create-issue] [--severity LEVEL] [--providers PROVIDERS] [--include-testing]\nExample: /vulns partition\nExample: /vulns partition --providers azure,aws --include-testing"
 
         services_arg = parts[1]
         create_issue = "--create-issue" in parts
@@ -232,7 +214,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         include_testing = "--include-testing" in parts
 
         try:
-            prompt_file = copilot_module.get_prompt_file("triage.md")
+            prompt_file = copilot_module.get_prompt_file("vulns.md")
         except FileNotFoundError as exc:  # pragma: no cover - packaging guard
             return f"Error: {exc}"
 
@@ -242,13 +224,13 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
         severity_str = ", ".join(severity_filter).upper() if severity_filter else "ALL"
-        console.print(f"\n[yellow]Running triage analysis for: {', '.join(services)} (severity: {severity_str})[/yellow]\n")
+        console.print(f"\n[yellow]Running vulnerability analysis for: {', '.join(services)} (severity: {severity_str})[/yellow]\n")
 
         # Use workflow function to store results for agent context
-        from spi_agent.workflows.triage_workflow import run_triage_workflow
+        from spi_agent.workflows.vulns_workflow import run_vulns_workflow
 
         try:
-            result = await run_triage_workflow(
+            result = await run_vulns_workflow(
                 agent=agent,
                 services=services,
                 severity_filter=severity_filter,
@@ -259,21 +241,21 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
             # Brief acknowledgment - agent will have access to full results via context injection
             await agent.agent.run(
-                f"The triage workflow just completed for {', '.join(services)}. "
+                f"The vulnerability analysis just completed for {', '.join(services)}. "
                 f"You now have access to the full results including vulnerability counts and CVE analysis. "
                 f"Acknowledge briefly and offer to help analyze the findings.",
                 thread=thread,
             )
         except Exception as e:
             await agent.agent.run(
-                f"The triage workflow encountered an error: {str(e)}. "
+                f"The vulnerability analysis encountered an error: {str(e)}. "
                 f"Acknowledge this and offer to help troubleshoot.",
                 thread=thread,
             )
 
         return None
 
-    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /status-glab, /test, /triage, /help"
+    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /help"
 
 
 def _render_help() -> None:
@@ -294,21 +276,21 @@ def _render_help() -> None:
 - "Scan partition service for security vulnerabilities"
 - "Show all available versions of commons-lang3"
 - "Analyze the pom.xml in partition for issues"
-- "Run triage for partition and create issues for critical CVEs"
+- "Run vulnerability scan for partition and create issues for critical CVEs"
 
 **Slash Commands:**
 - `/fork partition` - Fork partition repository
 - `/fork partition,legal` - Fork multiple repositories
 - `/fork partition --branch develop` - Fork with custom branch
-- `/status partition` - Check GitHub status for partition
+- `/status partition` - Check GitHub status for partition (default)
 - `/status partition,legal` - Check status for multiple repos
-- `/status-glab partition` - Check GitLab status for partition (default providers: azure,core)
-- `/status-glab partition --provider azure` - Check GitLab status with specific provider
+- `/status partition --platform gitlab` - Check GitLab status (providers: Azure,Core)
+- `/status partition --platform gitlab --provider azure` - GitLab status (azure only)
 - `/test partition` - Run Maven tests (default: core,core-plus,azure profiles)
 - `/test partition --provider aws` - Run tests with specific provider
-- `/triage partition` - Run dependency/vulnerability triage
-- `/triage partition --create-issue` - Run triage and create issues
-- `/triage partition --severity critical,high` - Filter by severity
+- `/vulns partition` - Run dependency/vulnerability analysis
+- `/vulns partition --create-issue` - Scan and create issues for vulnerabilities
+- `/vulns partition --severity critical,high` - Filter by severity
 - `/help` - Show this help
 """
     console.print(Panel(Markdown(help_text), title="💡 Help", border_style="yellow"))
@@ -340,7 +322,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
             console.print()
             console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
             console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-            console.print("[dim]Slash commands: /fork, /status, /status-glab, /test, /triage[/dim]\n")
+            console.print("[dim]Slash commands: /fork, /status, /test, /vulns[/dim]\n")
 
         thread = agent.agent.get_new_thread()
 
@@ -456,21 +438,21 @@ Commands:
   (none)              Interactive chat mode (default)
   -p PROMPT           Single query mode
   fork                Fork and initialize repositories (requires copilot)
-  status              Check GitHub status (requires copilot)
-  status-glab         Check GitLab status with provider filtering (requires copilot)
+  status              Check GitHub/GitLab status (requires copilot)
   test                Run Maven tests for services (requires copilot)
-  triage              Run dependency/vulnerability triage (requires copilot)
+  vulns               Run dependency/vulnerability analysis (requires copilot)
 
 Examples:
   spi-agent                                    # Interactive chat
   spi-agent -p "List issues in partition"      # One-shot query
   spi-agent fork --services partition          # Fork repos
-  spi-agent status --services partition,legal  # Check GitHub status
-  spi-agent status-glab --projects partition   # Check GitLab status
-  spi-agent status-glab --projects partition --provider azure  # GitLab status (azure only)
+  spi-agent status --services partition        # Check GitHub status (default)
+  spi-agent status --services partition,legal  # Check multiple repos
+  spi-agent status --services partition --platform gitlab  # Check GitLab status
+  spi-agent status --services partition --platform gitlab --provider azure  # GitLab (azure only)
   spi-agent test --services partition          # Run Maven tests
-  spi-agent triage --services partition        # Run triage analysis
-  spi-agent triage --services partition --create-issue  # Triage + create issues
+  spi-agent vulns --services partition         # Run vulnerability analysis
+  spi-agent vulns --services partition --create-issue  # Scan + create issues
         """,
     )
 
@@ -497,7 +479,7 @@ Examples:
 
         status_parser = subparsers.add_parser(
             "status",
-            help="Get GitHub status for OSDU SPI service repositories",
+            help="Get GitHub or GitLab status for OSDU SPI service repositories",
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         status_parser.add_argument(
@@ -506,22 +488,15 @@ Examples:
             required=True,
             help="Service name(s): 'all', single name, or comma-separated list",
         )
-
-        status_glab_parser = subparsers.add_parser(
-            "status-glab",
-            help="Get GitLab status for OSDU SPI service repositories",
-            formatter_class=argparse.RawDescriptionHelpFormatter,
+        status_parser.add_argument(
+            "--platform",
+            choices=["github", "gitlab"],
+            default="github",
+            help="Platform to query (default: github)",
         )
-        status_glab_parser.add_argument(
-            "--projects",
-            "-p",
-            required=True,
-            help="Project name(s): 'all', single name, or comma-separated list",
-        )
-        status_glab_parser.add_argument(
+        status_parser.add_argument(
             "--provider",
-            default="Azure,Core",
-            help="Provider label(s) for filtering (default: Azure,Core)",
+            help="Provider label(s) for filtering (GitLab only, default: Azure,Core)",
         )
 
         test_parser = subparsers.add_parser(
@@ -542,33 +517,33 @@ Examples:
             help="Cloud provider(s): azure, aws, gc, ibm, core, all (default: core,core-plus,azure)",
         )
 
-        triage_parser = subparsers.add_parser(
-            "triage",
-            help="Run Maven dependency and vulnerability triage analysis",
+        vulns_parser = subparsers.add_parser(
+            "vulns",
+            help="Run Maven dependency and vulnerability analysis",
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
-        triage_parser.add_argument(
+        vulns_parser.add_argument(
             "--services",
             "-s",
             required=True,
             help="Service name(s): 'all', single name, or comma-separated list",
         )
-        triage_parser.add_argument(
+        vulns_parser.add_argument(
             "--create-issue",
             action="store_true",
             help="Create GitHub tracking issues for critical/high findings",
         )
-        triage_parser.add_argument(
+        vulns_parser.add_argument(
             "--severity",
             default=None,
             help="Severity filter: critical, high, medium, low (default: all severities)",
         )
-        triage_parser.add_argument(
+        vulns_parser.add_argument(
             "--providers",
             default="azure",
             help="Provider(s) to include: azure, aws, gc, ibm, core, or comma-separated list (default: azure)",
         )
-        triage_parser.add_argument(
+        vulns_parser.add_argument(
             "--include-testing",
             action="store_true",
             help="Include testing modules in analysis (default: excluded)",
@@ -622,12 +597,8 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        try:
-            prompt_file = copilot_module.get_prompt_file("status.md")
-        except FileNotFoundError as exc:
-            console.print(f"[red]Error:[/red] {exc}", style="bold red")
-            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
-            return 1
+        # Determine platform
+        platform = parsed.platform
 
         services = copilot_module.parse_services(parsed.services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
@@ -635,32 +606,15 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
             return 1
 
-        runner = copilot_module.StatusRunner(prompt_file, services)
-        return runner.run()
+        # Setup providers for GitLab
+        if platform == "gitlab":
+            provider_arg = parsed.provider if parsed.provider else "Azure,Core"
+            providers = [p.strip() for p in provider_arg.split(",")]
+            runner = copilot_module.StatusRunner(None, services, providers)
+        else:
+            runner = copilot_module.StatusRunner(None, services)
 
-    if parsed.command == "status-glab":
-        if not COPILOT_AVAILABLE:
-            console.print("[red]Error:[/red] Copilot module not available", style="bold red")
-            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
-            return 1
-
-        try:
-            prompt_file = copilot_module.get_prompt_file("status-glab.md")
-        except FileNotFoundError as exc:
-            console.print(f"[red]Error:[/red] {exc}", style="bold red")
-            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
-            return 1
-
-        projects = copilot_module.parse_services(parsed.projects)
-        invalid = [p for p in projects if p not in copilot_module.SERVICES]
-        if invalid:
-            console.print(f"[red]Error:[/red] Invalid project(s): {', '.join(invalid)}", style="bold red")
-            return 1
-
-        providers = [p.strip() for p in parsed.provider.split(",")]
-
-        # Use StatusRunner with direct API mode for GitLab (fast, no AI)
-        runner = copilot_module.StatusRunner(prompt_file, projects, providers)
+        # Use StatusRunner with direct API mode (fast, no AI)
         return await runner.run_direct()
 
     if parsed.command == "test":
@@ -689,14 +643,14 @@ async def async_main(args: Optional[list[str]] = None) -> int:
         )
         return runner.run()
 
-    if parsed.command == "triage":
+    if parsed.command == "vulns":
         if not COPILOT_AVAILABLE:
             console.print("[red]Error:[/red] Copilot module not available", style="bold red")
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
         try:
-            prompt_file = copilot_module.get_prompt_file("triage.md")
+            prompt_file = copilot_module.get_prompt_file("vulns.md")
         except FileNotFoundError as exc:
             console.print(f"[red]Error:[/red] {exc}", style="bold red")
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
@@ -726,12 +680,12 @@ async def async_main(args: Optional[list[str]] = None) -> int:
         async with maven_mcp:
             if not maven_mcp.is_available:
                 console.print("[red]Error:[/red] Maven MCP not available", style="bold red")
-                console.print("[dim]Maven MCP is required for triage analysis[/dim]")
+                console.print("[dim]Maven MCP is required for vulnerability analysis[/dim]")
                 return 1
 
             agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
 
-            runner = copilot_module.TriageRunner(
+            runner = copilot_module.VulnsRunner(
                 prompt_file,
                 services,
                 agent,
