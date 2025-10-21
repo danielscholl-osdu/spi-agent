@@ -14,6 +14,16 @@ from spi_agent.config import AgentConfig
 
 logger = logging.getLogger(__name__)
 
+# Provider name to GitLab label mapping
+# Maps logical provider names (used in CLI) to actual GitLab label names
+PROVIDER_LABEL_MAPPING = {
+    "Core": ["Common Code", "Core"],  # Core maps to "Common Code" label (with fallback to "Core")
+    "Azure": ["Azure"],
+    "AWS": ["AWS"],
+    "GCP": ["GCP"],
+    "IBM": ["IBM"],
+}
+
 
 class GitLabDirectClient:
     """
@@ -211,22 +221,30 @@ class GitLabDirectClient:
         # Query for each provider label
         for provider in providers:
             try:
-                # Try capitalized version first (GitLab labels are case-sensitive)
-                for label_variant in [provider.capitalize(), provider, provider.upper()]:
-                    issues = await asyncio.to_thread(
-                        project.issues.list,
-                        labels=[label_variant],
-                        state="opened",
-                        per_page=10
-                    )
+                # Get mapped labels for this provider (or use provider name if no mapping)
+                mapped_labels = PROVIDER_LABEL_MAPPING.get(provider, [provider])
 
-                    # Add issues, avoiding duplicates
-                    for issue in issues:
-                        if issue.iid not in seen_iids:
-                            seen_iids.add(issue.iid)
-                            all_issues.append(self._format_issue(issue))
+                # Try each mapped label
+                for label_name in mapped_labels:
+                    # Try different case variants (GitLab labels are case-sensitive)
+                    for label_variant in [label_name, label_name.capitalize(), label_name.upper()]:
+                        issues = await asyncio.to_thread(
+                            project.issues.list,
+                            labels=[label_variant],
+                            state="opened",
+                            per_page=10
+                        )
 
-                    if issues:  # Found issues with this label variant
+                        # Add issues, avoiding duplicates
+                        for issue in issues:
+                            if issue.iid not in seen_iids:
+                                seen_iids.add(issue.iid)
+                                all_issues.append(self._format_issue(issue))
+
+                        if issues:  # Found issues with this label variant
+                            break
+
+                    if issues:  # Found issues with this mapped label
                         break
 
             except GitlabError as e:
@@ -258,29 +276,37 @@ class GitLabDirectClient:
         # Query for each provider label
         for provider in providers:
             try:
-                # Try capitalized version first
-                for label_variant in [provider.capitalize(), provider, provider.upper()]:
-                    mrs = await asyncio.to_thread(
-                        project.mergerequests.list,
-                        labels=[label_variant],
-                        state="opened",
-                        per_page=10
-                    )
+                # Get mapped labels for this provider (or use provider name if no mapping)
+                mapped_labels = PROVIDER_LABEL_MAPPING.get(provider, [provider])
 
-                    # Add MRs, avoiding duplicates
-                    for mr in mrs:
-                        if mr.iid not in seen_iids:
-                            seen_iids.add(mr.iid)
-                            mr_data = self._format_merge_request(mr)
+                # Try each mapped label
+                for label_name in mapped_labels:
+                    # Try different case variants (GitLab labels are case-sensitive)
+                    for label_variant in [label_name, label_name.capitalize(), label_name.upper()]:
+                        mrs = await asyncio.to_thread(
+                            project.mergerequests.list,
+                            labels=[label_variant],
+                            state="opened",
+                            per_page=10
+                        )
 
-                            # Fetch pipelines for this MR
-                            mr_data["pipelines"] = await self._get_mr_pipelines(
-                                project, mr
-                            )
+                        # Add MRs, avoiding duplicates
+                        for mr in mrs:
+                            if mr.iid not in seen_iids:
+                                seen_iids.add(mr.iid)
+                                mr_data = self._format_merge_request(mr)
 
-                            all_mrs.append(mr_data)
+                                # Fetch pipelines for this MR
+                                mr_data["pipelines"] = await self._get_mr_pipelines(
+                                    project, mr
+                                )
 
-                    if mrs:  # Found MRs with this label variant
+                                all_mrs.append(mr_data)
+
+                        if mrs:  # Found MRs with this label variant
+                            break
+
+                    if mrs:  # Found MRs with this mapped label
                         break
 
             except GitlabError as e:
