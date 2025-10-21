@@ -251,7 +251,89 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
         return None
 
-    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /help"
+    if cmd == "send":
+        if len(parts) < 2:
+            return (
+                "Usage: /send <service> --pr <number> | --issue <number> | --pr <pr_num> --issue <issue_num>\n\n"
+                "Examples:\n"
+                "  /send partition --pr 5\n"
+                "  /send legal --issue 10\n"
+                "  /send partition --pr 5 --issue 10\n\n"
+                "Sends GitHub Pull Requests and/or Issues to the corresponding GitLab project."
+            )
+
+        service = parts[1]
+
+        # Validate service
+        if not COPILOT_AVAILABLE or copilot_module is None:
+            return "Error: Copilot module not available for service validation"
+
+        if service not in copilot_module.SERVICES:
+            return f"Error: Invalid service '{service}'"
+
+        # Parse --pr and --issue flags
+        pr_number = None
+        issue_number = None
+
+        if "--pr" in parts:
+            pr_idx = parts.index("--pr")
+            if pr_idx + 1 < len(parts):
+                try:
+                    pr_number = int(parts[pr_idx + 1])
+                except ValueError:
+                    return "Error: --pr requires a numeric PR number"
+            else:
+                return "Error: --pr requires a PR number"
+
+        if "--issue" in parts:
+            issue_idx = parts.index("--issue")
+            if issue_idx + 1 < len(parts):
+                try:
+                    issue_number = int(parts[issue_idx + 1])
+                except ValueError:
+                    return "Error: --issue requires a numeric issue number"
+            else:
+                return "Error: --issue requires an issue number"
+
+        # Require at least one of --pr or --issue
+        if pr_number is None and issue_number is None:
+            return "Error: Must specify --pr or --issue"
+
+        # Import send workflow functions
+        from spi_agent.workflows.send_workflow import send_pr_to_gitlab, send_issue_to_gitlab
+
+        # Execute send operations
+        results = []
+
+        if pr_number is not None:
+            console.print(f"[yellow]Sending GitHub PR #{pr_number} to GitLab...[/yellow]")
+            pr_result = send_pr_to_gitlab(service, pr_number, agent.config)
+            results.append(pr_result)
+
+            if "✓" in pr_result:
+                console.print(f"[green]{pr_result}[/green]\n")
+            else:
+                console.print(f"[red]{pr_result}[/red]\n")
+
+        if issue_number is not None:
+            console.print(f"[yellow]Sending GitHub Issue #{issue_number} to GitLab...[/yellow]")
+            issue_result = send_issue_to_gitlab(service, issue_number, agent.config)
+            results.append(issue_result)
+
+            if "✓" in issue_result:
+                console.print(f"[green]{issue_result}[/green]\n")
+            else:
+                console.print(f"[red]{issue_result}[/red]\n")
+
+        # Display summary if both were sent
+        if pr_number is not None and issue_number is not None:
+            console.print("\n[bold]Send Summary:[/bold]")
+            console.print(f"  PR #{pr_number}: {'✓ Success' if '✓' in results[0] else '✗ Failed'}")
+            console.print(f"  Issue #{issue_number}: {'✓ Success' if '✓' in results[1] else '✗ Failed'}")
+
+        return None
+
+    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /send, /help"
 
 
 def _render_help() -> None:
@@ -287,6 +369,9 @@ def _render_help() -> None:
 - `/vulns <service>` - Run dependency/vulnerability analysis
 - `/vulns <service> --create-issue` - Scan and create issues for vulnerabilities
 - `/vulns <service> --severity critical,high` - Filter by severity
+- `/send <service> --pr <number>` - Send GitHub PR to GitLab as Merge Request
+- `/send <service> --issue <number>` - Send GitHub Issue to GitLab
+- `/send <service> --pr <num> --issue <num>` - Send both PR and Issue
 - `/help` - Show this help
 """
     console.print(Panel(Markdown(help_text), title="💡 Help", border_style="yellow"))
@@ -318,7 +403,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
             console.print()
             console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
             console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-            console.print("[dim]Slash commands: /fork, /status, /test, /vulns[/dim]\n")
+            console.print("[dim]Slash commands: /fork, /status, /test, /vulns, /send[/dim]\n")
 
         thread = agent.agent.get_new_thread()
 
@@ -511,6 +596,7 @@ Commands:
   status              Check GitHub/GitLab status (requires copilot)
   test                Run Maven tests for services (requires copilot)
   vulns               Run dependency/vulnerability analysis (requires copilot)
+  send                Send GitHub PRs/Issues to GitLab (requires copilot)
 
 Examples:
   spi                                    # Interactive chat
@@ -520,6 +606,7 @@ Examples:
   spi status --service partition --platform gitlab  # Check GitLab status
   spi test --service partition          # Run Maven tests
   spi vulns --service partition         # Run vulnerability analysis
+  spi send --service partition --pr 5   # Send PR to GitLab
         """,
     )
 
@@ -614,6 +701,28 @@ Examples:
             "--include-testing",
             action="store_true",
             help="Include testing modules in analysis (default: excluded)",
+        )
+
+        send_parser = subparsers.add_parser(
+            "send",
+            help="Send GitHub Pull Requests and Issues to GitLab",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        send_parser.add_argument(
+            "--service",
+            "-s",
+            required=True,
+            help="Service name (e.g., 'partition', 'legal')",
+        )
+        send_parser.add_argument(
+            "--pr",
+            type=int,
+            help="GitHub Pull Request number to send",
+        )
+        send_parser.add_argument(
+            "--issue",
+            type=int,
+            help="GitHub Issue number to send",
         )
 
     parser.add_argument(
@@ -751,6 +860,128 @@ async def async_main(args: Optional[list[str]] = None) -> int:
                 include_testing,
             )
             return await runner.run()
+
+    if parsed.command == "send":
+        if not COPILOT_AVAILABLE:
+            console.print("[red]Error:[/red] Copilot module not available", style="bold red")
+            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
+            return 1
+
+        # Validate service
+        service = parsed.service
+        if service not in copilot_module.SERVICES:
+            console.print(f"[red]Error:[/red] Invalid service '{service}'", style="bold red")
+            console.print(f"[dim]Available services: {', '.join(sorted(copilot_module.SERVICES))}[/dim]")
+            return 1
+
+        # Require at least one of --pr or --issue
+        if not parsed.pr and not parsed.issue:
+            console.print("[red]Error:[/red] Must specify --pr or --issue", style="bold red")
+            console.print("[dim]Usage: spi send --service <name> --pr <num> | --issue <num>[/dim]")
+            return 1
+
+        # Import send workflow functions
+        from spi_agent.workflows.send_workflow import send_pr_to_gitlab, send_issue_to_gitlab
+
+        config = AgentConfig()
+        results = []
+        github_urls = []
+        gitlab_urls = []
+        has_error = False
+
+        # Send PR if specified
+        if parsed.pr:
+            with console.status(f"[bold blue]Sending GitHub PR #{parsed.pr} to GitLab...[/bold blue]", spinner="dots"):
+                pr_result = send_pr_to_gitlab(service, parsed.pr, config)
+                results.append(("PR", parsed.pr, pr_result))
+
+                # Extract URLs from result
+                if "✓" in pr_result:
+                    # Success - extract URLs
+                    for line in pr_result.split("\n"):
+                        if line.startswith("GitHub:"):
+                            github_urls.append(("PR", line.replace("GitHub:", "").strip()))
+                        elif line.startswith("GitLab:"):
+                            gitlab_urls.append(("MR", line.replace("GitLab:", "").strip()))
+                else:
+                    has_error = True
+
+        # Send Issue if specified
+        if parsed.issue:
+            with console.status(f"[bold blue]Sending GitHub Issue #{parsed.issue} to GitLab...[/bold blue]", spinner="dots"):
+                issue_result = send_issue_to_gitlab(service, parsed.issue, config)
+                results.append(("Issue", parsed.issue, issue_result))
+
+                # Extract URLs from result
+                if "✓" in issue_result:
+                    # Success - extract URLs
+                    for line in issue_result.split("\n"):
+                        if line.startswith("GitHub:"):
+                            github_urls.append(("Issue", line.replace("GitHub:", "").strip()))
+                        elif line.startswith("GitLab:"):
+                            gitlab_urls.append(("Issue", line.replace("GitLab:", "").strip()))
+                else:
+                    has_error = True
+
+        # Display results
+        console.print()
+
+        if len(results) == 1:
+            # Single item - display simple panel
+            item_type, item_num, result = results[0]
+
+            if "✓" in result:
+                # Success
+                output_lines = [f"[green]✓ Sent {item_type} #{item_num} from GitHub to GitLab[/green]\n"]
+                for url_type, url in github_urls + gitlab_urls:
+                    output_lines.append(f"{url_type}: {url}")
+
+                console.print(
+                    Panel(
+                        "\n".join(output_lines),
+                        title="[bold green]Send Complete[/bold green]",
+                        border_style="green",
+                        padding=(1, 2),
+                    )
+                )
+            else:
+                # Error
+                # Extract error message (remove "Error: " prefix if present)
+                error_msg = result.replace("Error:", "").strip()
+                console.print(
+                    Panel(
+                        f"[red]{error_msg}[/red]",
+                        title="[bold red]Error[/bold red]",
+                        border_style="red",
+                        padding=(1, 2),
+                    )
+                )
+        else:
+            # Multiple items - display summary
+            summary_lines = []
+            for item_type, item_num, result in results:
+                if "✓" in result:
+                    summary_lines.append(f"[green]{item_type} #{item_num}: ✓ Success[/green]")
+                else:
+                    summary_lines.append(f"[red]{item_type} #{item_num}: ✗ Failed[/red]")
+
+            summary_lines.append("")  # Blank line
+
+            # Add URLs
+            for url_type, url in github_urls + gitlab_urls:
+                summary_lines.append(f"{url_type}: {url}")
+
+            console.print(
+                Panel(
+                    "\n".join(summary_lines),
+                    title="[bold cyan]Send Summary[/bold cyan]",
+                    border_style="cyan",
+                    padding=(1, 2),
+                )
+            )
+
+        console.print()
+        return 1 if has_error else 0
 
     if parsed.prompt:
         return await run_single_query(parsed.prompt, parsed.quiet)
