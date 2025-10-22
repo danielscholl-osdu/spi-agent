@@ -49,18 +49,20 @@ from spi_agent.copilot.models import (
 )
 
 # Import trackers
-from spi_agent.copilot.trackers import ServiceTracker, StatusTracker, TestTracker, VulnsTracker
+from spi_agent.copilot.trackers import DependsTracker, ServiceTracker, StatusTracker, TestTracker, VulnsTracker
 
 # Import runners
-from spi_agent.copilot.runners import CopilotRunner, StatusRunner, VulnsRunner
+from spi_agent.copilot.runners import CopilotRunner, DependsRunner, StatusRunner, VulnsRunner
 
 
 __all__ = [
     "SERVICES",
     "CopilotConfig",
     "CopilotRunner",
+    "DependsRunner",
     "StatusRunner",
     "VulnsRunner",
+    "DependsTracker",
     "TestTracker",
     "VulnsTracker",
     "parse_services",

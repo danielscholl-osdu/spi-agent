@@ -198,8 +198,8 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
                 severity_arg = parts[severity_idx + 1]
                 severity_filter = [s.strip().lower() for s in severity_arg.split(",")]
 
-        # Parse --providers flag (default: azure)
-        providers = ["azure"]
+        # Parse --providers flag (default: core-plus, azure)
+        providers = ["core-plus", "azure"]
         if "--providers" in parts:
             providers_idx = parts.index("--providers")
             if providers_idx + 1 < len(parts):
@@ -333,7 +333,58 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
         return None
 
-    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /send, /help"
+    if cmd == "depends":
+        if len(parts) < 2:
+            return "Usage: /depends <service> [--providers <providers>] [--include-testing] [--create-issue]\nExamples:\n  /depends partition\n  /depends partition --providers azure,core\n  /depends partition,legal --create-issue"
+
+        services_arg = parts[1]
+
+        # Parse --providers flag (default: core-plus, azure)
+        providers = ["core-plus", "azure"]
+        if "--providers" in parts:
+            providers_idx = parts.index("--providers")
+            if providers_idx + 1 < len(parts):
+                providers_arg = parts[providers_idx + 1]
+                providers = [p.strip() for p in providers_arg.split(",")]
+
+        # Parse --include-testing flag
+        include_testing = "--include-testing" in parts
+
+        # Parse --create-issue flag
+        create_issue = "--create-issue" in parts
+
+        if not COPILOT_AVAILABLE or copilot_module is None:
+            return "Error: Copilot module not available for service validation"
+
+        services = copilot_module.parse_services(services_arg)
+        invalid = [s for s in services if s not in copilot_module.SERVICES]
+        if invalid:
+            return f"Error: Invalid service(s): {', '.join(invalid)}"
+
+        providers_str = ', '.join(providers)
+        console.print(f"\n[yellow]Analyzing dependencies for: {', '.join(services)} (providers: {providers_str})[/yellow]\n")
+
+        # Use workflow function to store results for agent context
+        from spi_agent.workflows.depends_workflow import run_depends_workflow
+
+        result = await run_depends_workflow(
+            agent=agent,
+            services=services,
+            providers=providers,
+            include_testing=include_testing,
+            create_issue=create_issue,
+        )
+
+        # Brief acknowledgment - agent will have access to full results via context injection
+        await agent.agent.run(
+            f"The dependency analysis just completed for {', '.join(services)}. "
+            f"You now have access to the update analysis results. "
+            f"Acknowledge briefly and offer to help review or apply updates.",
+            thread=thread,
+        )
+        return None
+
+    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /send, /depends, /help"
 
 
 def _render_help() -> None:
@@ -369,6 +420,9 @@ def _render_help() -> None:
 - `/vulns <service>` - Run dependency/vulnerability analysis
 - `/vulns <service> --create-issue` - Scan and create issues for vulnerabilities
 - `/vulns <service> --severity critical,high` - Filter by severity
+- `/depends <service>` - Analyze dependency updates (default: azure provider)
+- `/depends <service> --providers azure,core` - Check updates for specific providers
+- `/depends <service> --create-issue` - Create issues for available updates
 - `/send <service> --pr <number>` - Send GitHub PR to GitLab as Merge Request
 - `/send <service> --issue <number>` - Send GitHub Issue to GitLab
 - `/send <service> --pr <num> --issue <num>` - Send both PR and Issue
@@ -403,7 +457,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
             console.print()
             console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
             console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-            console.print("[dim]Slash commands: /fork, /status, /test, /vulns, /send[/dim]\n")
+            console.print("[dim]Slash commands: /fork, /status, /test, /vulns, /depends, /send[/dim]\n")
 
         thread = agent.agent.get_new_thread()
 
@@ -596,6 +650,7 @@ Commands:
   status              Check GitHub/GitLab status (requires copilot)
   test                Run Maven tests for services (requires copilot)
   vulns               Run dependency/vulnerability analysis (requires copilot)
+  depends             Analyze dependency updates (requires copilot)
   send                Send GitHub PRs/Issues to GitLab (requires copilot)
 
 Examples:
@@ -606,6 +661,7 @@ Examples:
   spi status --service partition --platform gitlab  # Check GitLab status
   spi test --service partition          # Run Maven tests
   spi vulns --service partition         # Run vulnerability analysis
+  spi depends --service partition       # Analyze dependency updates
   spi send --service partition --pr 5   # Send PR to GitLab
         """,
     )
@@ -723,6 +779,33 @@ Examples:
             "--issue",
             type=int,
             help="GitHub Issue number to send",
+        )
+
+        depends_parser = subparsers.add_parser(
+            "depends",
+            help="Analyze Maven dependencies for available updates",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        depends_parser.add_argument(
+            "--service",
+            "-s",
+            default="all",
+            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
+        )
+        depends_parser.add_argument(
+            "--providers",
+            default="core-plus,azure",
+            help="Provider(s) to include: core-plus, azure, aws, gcp, or comma-separated list (default: core-plus,azure)",
+        )
+        depends_parser.add_argument(
+            "--include-testing",
+            action="store_true",
+            help="Include testing modules in analysis (default: excluded)",
+        )
+        depends_parser.add_argument(
+            "--create-issue",
+            action="store_true",
+            help="Create GitHub tracking issues for available updates",
         )
 
     parser.add_argument(
@@ -982,6 +1065,53 @@ async def async_main(args: Optional[list[str]] = None) -> int:
 
         console.print()
         return 1 if has_error else 0
+
+    if parsed.command == "depends":
+        if not COPILOT_AVAILABLE:
+            console.print("[red]Error:[/red] Copilot module not available", style="bold red")
+            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
+            return 1
+
+        try:
+            prompt_file = copilot_module.get_prompt_file("depends.md")
+        except FileNotFoundError as exc:
+            console.print(f"[red]Error:[/red] {exc}", style="bold red")
+            console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
+            return 1
+
+        services = copilot_module.parse_services(parsed.service)
+        invalid = [s for s in services if s not in copilot_module.SERVICES]
+        if invalid:
+            console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
+            return 1
+
+        # Parse providers filter (default: azure + core modules always included)
+        providers = [p.strip().lower() for p in parsed.providers.split(",")]
+
+        # Include testing if flag set
+        include_testing = parsed.include_testing
+
+        # Create agent with MCP tools for dependency analysis
+        config = AgentConfig()
+        maven_mcp = MavenMCPManager(config)
+
+        async with maven_mcp:
+            if not maven_mcp.is_available:
+                console.print("[red]Error:[/red] Maven MCP not available", style="bold red")
+                console.print("[dim]Maven MCP is required for dependency analysis[/dim]")
+                return 1
+
+            agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
+
+            runner = copilot_module.DependsRunner(
+                prompt_file,
+                services,
+                agent,
+                parsed.create_issue,
+                providers,
+                include_testing,
+            )
+            return await runner.run()
 
     if parsed.prompt:
         return await run_single_query(parsed.prompt, parsed.quiet)

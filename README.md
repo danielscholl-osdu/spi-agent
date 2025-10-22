@@ -9,7 +9,7 @@ AI-powered GitHub & GitLab management for OSDU SPI services. Chat with your repo
 
 SPI Agent provides a conversational interface for managing **GitHub** and **GitLab** repositories across OSDU SPI services. Manage Issues, Pull/Merge Requests, Workflows/Pipelines, Code Scanning, and more. With Maven MCP integration, gain powerful **dependency management** and **security scanning** capabilities. Perform comprehensive multi-platform repository operations without leaving your terminal.
 
-**48+ Tools Available** (when both platforms configured):
+**50+ Tools Available** (when both platforms configured):
 
 **GitHub:**
 - 🐛 **Issues**: List, read, create, update, comment, search, **assign to Copilot**
@@ -24,7 +24,7 @@ SPI Agent provides a conversational interface for managing **GitHub** and **GitL
 
 **Common:**
 - 📁 **File System**: List files, read contents, search patterns, parse POMs, find dependency versions
-- 📦 **Maven Dependencies** (optional): Version checks, vulnerability scanning, triage analysis
+- 📦 **Maven Dependencies** (optional): Version checks, dependency updates, vulnerability scanning, triage analysis
 
 ```bash
 You: List all open issues in partition
@@ -58,6 +58,9 @@ Agent: -- Custom workflow results --
 
 You: /test partition
 Agent: -- Maven test results --
+
+You: /depends partition
+Agent: -- Dependency update analysis results --
 
 You: The latest os-core-lib-azure version is 2.2.6. Locate services that aren't at the latest version.
 Agent: Found 3 reference(s) to org.opengroup.osdu:os-core-lib-azure:
@@ -196,6 +199,56 @@ spi status --service storage --platform gitlab --provider GCP
 Provider filtering uses GitLab labels on issues and merge requests. When multiple providers are specified (e.g., `Azure,Core`), items with ANY of those labels are shown.
 
 **Note:** GitLab labels are case-sensitive. Use capitalized names: `Azure`, `Core`, `GCP`, `AWS`
+
+### Dependency Update Analysis Command
+
+Analyze Maven dependencies across OSDU SPI services and identify available updates:
+
+```bash
+# Check single service with default provider (Azure)
+spi depends --service partition
+
+# Check multiple services
+spi depends --service partition,legal
+
+# Check with specific providers
+spi depends --service partition --providers azure,core
+
+# Check all services
+spi depends --service all --providers azure
+
+# Include testing modules
+spi depends --service partition --include-testing
+
+# Create GitHub issues for available updates
+spi depends --service partition --create-issue
+```
+
+**What It Shows:**
+- Dependency Assessment: Quality grades (A-F) based on dependency freshness
+- Update Counts: Major, minor, and patch updates available per service
+- Module Breakdown: Provider-specific dependency analysis (azure, aws, gcp, core)
+- Update Recommendations: Prioritized list of dependencies to update
+- Cross-Service Analysis: Common dependencies across multiple services
+
+**Grading System:**
+- **Grade A**: 0-5% dependencies outdated (Excellent)
+- **Grade B**: 6-15% dependencies outdated (Good)
+- **Grade C**: 16-30% dependencies outdated (Needs attention)
+- **Grade D**: 31-50% dependencies outdated (Poor)
+- **Grade F**: >50% dependencies outdated (Critical)
+
+**Provider Filtering:**
+By default, only Azure provider modules are analyzed. Use `--providers` to include other providers:
+- `azure`: Azure provider modules
+- `aws`: AWS provider modules
+- `gcp`: GCP provider modules
+- `core`: Core modules (always included)
+
+**Update Categories:**
+- **Major**: Breaking changes (2.x.x → 3.x.x) - Review carefully
+- **Minor**: New features, backward compatible (2.5.x → 2.8.x) - Update when convenient
+- **Patch**: Bug fixes only (2.5.1 → 2.5.3) - Apply for security fixes
 
 
 ## Development & Testing
