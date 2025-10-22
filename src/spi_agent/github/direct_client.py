@@ -267,6 +267,26 @@ class GitHubDirectClient:
             for keyword in ["release", "version", "bump"]
         )
 
+        # Get review status
+        approved_count = 0
+        changes_requested = False
+        try:
+            reviews = list(pr.get_reviews())
+            # Get latest review from each reviewer
+            latest_reviews = {}
+            for review in reviews:
+                reviewer = review.user.login if review.user else "unknown"
+                latest_reviews[reviewer] = review.state
+
+            # Count approvals and check for changes requested
+            for state in latest_reviews.values():
+                if state == "APPROVED":
+                    approved_count += 1
+                elif state == "CHANGES_REQUESTED":
+                    changes_requested = True
+        except:
+            pass  # If review fetch fails, continue without review data
+
         return {
             "number": pr.number,
             "title": pr.title,
@@ -276,6 +296,10 @@ class GitHubDirectClient:
             "author": pr.user.login if pr.user else "unknown",
             "headRefName": pr.head.ref,
             "headRefOid": pr.head.sha,
+            "mergeable": pr.mergeable,  # True, False, or None (computing)
+            "mergeable_state": pr.mergeable_state,  # clean, unstable, blocked, dirty, etc.
+            "approved_count": approved_count,
+            "changes_requested": changes_requested,
             "created_at": pr.created_at.isoformat() + "Z",
             "updated_at": pr.updated_at.isoformat() + "Z",
             "html_url": pr.html_url

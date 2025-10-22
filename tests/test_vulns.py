@@ -163,7 +163,7 @@ class TestVulnsRunner:
         assert runner.create_issue is False
         assert runner.severity_filter == ["critical", "high"]
         assert isinstance(runner.tracker, VulnsTracker)
-        assert runner.log_file.name.startswith("triage_")
+        assert runner.log_file.name.startswith("vulns_")
 
     def test_initialization_with_defaults(self, mock_prompt_file, mock_agent):
         """Test VulnsRunner initialization with defaults."""
@@ -281,24 +281,33 @@ class TestVulnsRunner:
         assert panel.border_style == "green"
 
     def test_log_file_naming(self, mock_prompt_file, mock_agent):
-        """Test log file naming with multiple services."""
+        """Test log file naming uses timestamp only (no service names)."""
+        import re
+
         # Single service
         runner1 = VulnsRunner(mock_prompt_file, ["partition"], mock_agent)
-        assert "partition" in str(runner1.log_file)
+        log_name = str(runner1.log_file)
+        assert "vulns_" in log_name
+        assert re.search(r"vulns_\d{8}_\d{6}\.log$", log_name)
+        assert "partition" not in log_name
 
-        # Multiple services (<=3)
+        # Multiple services - still no service names in filename
         runner2 = VulnsRunner(mock_prompt_file, ["partition", "legal", "schema"], mock_agent)
         log_name = str(runner2.log_file)
-        assert "partition-legal-schema" in log_name
+        assert "vulns_" in log_name
+        assert re.search(r"vulns_\d{8}_\d{6}\.log$", log_name)
+        assert "partition" not in log_name
+        assert "legal" not in log_name
 
-        # Many services (>3)
+        # Many services - still no service names in filename
         runner3 = VulnsRunner(
             mock_prompt_file,
             ["partition", "legal", "schema", "file", "storage"],
             mock_agent,
         )
         log_name = str(runner3.log_file)
-        assert "partition-legal-schema-and-2-more" in log_name
+        assert "vulns_" in log_name
+        assert re.search(r"vulns_\d{8}_\d{6}\.log$", log_name)
 
     def test_show_config(self, mock_prompt_file, mock_agent):
         """Test configuration display."""

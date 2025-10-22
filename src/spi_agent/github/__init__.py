@@ -150,6 +150,14 @@ class GitHubTools:
         """Check if a PR has workflows waiting for approval."""
         return self._workflows.check_pr_workflow_approvals(*args, **kwargs)
 
+    def approve_pr_workflows(self, *args, **kwargs):
+        """Approve pending workflow runs for a PR."""
+        return self._workflows.approve_pr_workflows(*args, **kwargs)
+
+    def rerun_workflow_run(self, *args, **kwargs):
+        """Rerun a workflow run (also serves as approval for action_required workflows)."""
+        return self._workflows.rerun_workflow_run(*args, **kwargs)
+
     # ============ CODE SCANNING ============
 
     def list_code_scanning_alerts(self, *args, **kwargs):
@@ -219,10 +227,10 @@ def create_github_tools(config: AgentConfig) -> List:
         config: Agent configuration containing GitHub token and org info
 
     Returns:
-        List of 25 bound tool methods with 'gh_' prefix organized by domain:
+        List of 27 bound tool methods with 'gh_' prefix organized by domain:
         - Issues (8 tools): gh_list_issues, gh_get_issue, gh_create_issue, etc.
         - Pull Requests (7 tools): gh_list_pull_requests, gh_get_pull_request, etc.
-        - Workflows/Actions (6 tools): gh_list_workflows, gh_trigger_workflow, etc.
+        - Workflows/Actions (8 tools): gh_list_workflows, gh_trigger_workflow, gh_approve_pr_workflows, etc.
         - Code Scanning (2 tools): gh_list_code_scanning_alerts, gh_get_code_scanning_alert
         - Repository Variables (2 tools): gh_get_repository_variables, gh_get_repository_variable
     """
@@ -254,13 +262,15 @@ def create_github_tools(config: AgentConfig) -> List:
         _prefix_tool_name(pull_requests.update_pull_request),
         _prefix_tool_name(pull_requests.merge_pull_request),
         _prefix_tool_name(pull_requests.add_pr_comment),
-        # Workflows/Actions (6 tools)
+        # Workflows/Actions (8 tools)
         _prefix_tool_name(workflows.list_workflows),
         _prefix_tool_name(workflows.list_workflow_runs),
         _prefix_tool_name(workflows.get_workflow_run),
         _prefix_tool_name(workflows.trigger_workflow),
         _prefix_tool_name(workflows.cancel_workflow_run),
         _prefix_tool_name(workflows.check_pr_workflow_approvals),
+        _prefix_tool_name(workflows.approve_pr_workflows),
+        _prefix_tool_name(workflows.rerun_workflow_run),
         # Code Scanning (2 tools)
         _prefix_tool_name(code_scanning.list_code_scanning_alerts),
         _prefix_tool_name(code_scanning.get_code_scanning_alert),

@@ -26,7 +26,7 @@ class _OutputPanelRenderable:
     def __rich__(self):
         return self.runner.get_output_panel()
 
-console = Console()
+console = Console(legacy_windows=False)
 MIN_VISIBLE_OUTPUT_LINES = 12
 MAX_VISIBLE_OUTPUT_LINES = 80
 TERMINAL_PADDING_LINES = 2
@@ -56,10 +56,7 @@ class BaseRunner(ABC):
 
         # Generate log file path - subclasses should override log_prefix
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        services_str = "-".join(services[:3])  # Max 3 service names in filename
-        if len(services) > 3:
-            services_str += f"-and-{len(services)-3}-more"
-        self.log_file = log_dir / f"{self.log_prefix}_{timestamp}_{services_str}.log"
+        self.log_file = log_dir / f"{self.log_prefix}_{timestamp}.log"
 
     @property
     @abstractmethod

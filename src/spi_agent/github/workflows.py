@@ -427,6 +427,49 @@ class WorkflowTools(GitHubToolsBase):
         except Exception as e:
             return f"Error checking PR workflow approvals: {str(e)}"
 
+    def rerun_workflow_run(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        run_id: Annotated[int, Field(description="Workflow run ID")],
+    ) -> str:
+        """
+        Rerun a workflow run. This also serves as "approval" for action_required workflows.
+
+        Returns formatted string with rerun confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+
+            # Use gh CLI to rerun the workflow
+            result = subprocess.run(
+                [
+                    "gh",
+                    "run",
+                    "rerun",
+                    str(run_id),
+                    "-R",
+                    repo_full_name,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode == 0:
+                return (
+                    f"✓ Rerun workflow run #{run_id} in {repo_full_name}\n"
+                    f"Status: Workflow will start running\n"
+                )
+            else:
+                return f"Failed to rerun workflow run #{run_id}\nError: {result.stderr}"
+
+        except subprocess.TimeoutExpired:
+            return f"Timeout while rerunning workflow run #{run_id}"
+        except FileNotFoundError:
+            return "GitHub CLI (gh) is not installed or not in PATH"
+        except Exception as e:
+            return f"Error rerunning workflow run: {str(e)}"
+
     def approve_pr_workflows(
         self,
         repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
@@ -435,13 +478,13 @@ class WorkflowTools(GitHubToolsBase):
         """
         Approve pending workflow runs for a PR.
 
-        Uses GitHub CLI to approve workflows that are waiting for approval.
+        Uses GitHub CLI to approve workflows (for fork PRs) or rerun them (for non-fork PRs).
         Returns formatted string with approval confirmation.
         """
         try:
             repo_full_name = self.config.get_repo_full_name(repo)
 
-            # First, get the PR to find its head SHA
+            # First, get the PR to find its head branch
             result = subprocess.run(
                 [
                     "gh",
@@ -451,7 +494,7 @@ class WorkflowTools(GitHubToolsBase):
                     "-R",
                     repo_full_name,
                     "--json",
-                    "headRefOid",
+                    "headRefName",
                 ],
                 capture_output=True,
                 text=True,
@@ -462,18 +505,19 @@ class WorkflowTools(GitHubToolsBase):
                 return f"Failed to get PR #{pr_number} details\nError: {result.stderr}"
 
             pr_data = json.loads(result.stdout)
-            head_sha = pr_data.get("headRefOid")
+            head_branch = pr_data.get("headRefName")
 
-            if not head_sha:
-                return f"Could not find commit SHA for PR #{pr_number}"
+            if not head_branch:
+                return f"Could not find branch for PR #{pr_number}"
 
-            # Get workflow runs for this commit that need approval
+            # Get workflow runs for this branch that need approval
             # Note: action_required is a CONCLUSION not a status
+            # Query by branch to catch workflows from all commits, not just the latest
             result = subprocess.run(
                 [
                     "gh",
                     "api",
-                    f"/repos/{repo_full_name}/actions/runs?head_sha={head_sha}",
+                    f"/repos/{repo_full_name}/actions/runs?branch={head_branch}",
                     "--jq",
                     ".workflow_runs[] | select(.conclusion == \"action_required\") | {id, name, status, conclusion}",
                 ],
@@ -498,6 +542,7 @@ class WorkflowTools(GitHubToolsBase):
                 return f"No workflows awaiting approval for PR #{pr_number} in {repo_full_name}"
 
             # Approve each workflow run
+            # Try approve endpoint first (for fork PRs), fallback to rerun (for non-fork PRs)
             approved = []
             failed = []
 
@@ -505,6 +550,7 @@ class WorkflowTools(GitHubToolsBase):
                 run_id = run.get("id")
                 run_name = run.get("name", "Unknown")
 
+                # Try approve endpoint first (works for fork PRs)
                 approve_result = subprocess.run(
                     [
                         "gh",
@@ -521,7 +567,25 @@ class WorkflowTools(GitHubToolsBase):
                 if approve_result.returncode == 0:
                     approved.append(run_name)
                 else:
-                    failed.append((run_name, approve_result.stderr))
+                    # If approve fails (e.g., not from fork), try rerun instead
+                    rerun_result = subprocess.run(
+                        [
+                            "gh",
+                            "run",
+                            "rerun",
+                            str(run_id),
+                            "-R",
+                            repo_full_name,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+
+                    if rerun_result.returncode == 0:
+                        approved.append(run_name)
+                    else:
+                        failed.append((run_name, f"Approve failed: {approve_result.stderr}, Rerun failed: {rerun_result.stderr}"))
 
             # Format output
             output_lines = []

@@ -298,17 +298,36 @@ class PullRequestTools(GitHubToolsBase):
                 update_params["state"] = state.lower()
                 updated_fields.append("state")
 
-            if draft is not None:
-                update_params["draft"] = draft
-                updated_fields.append("draft")
-
             if base_branch is not None:
                 update_params["base"] = base_branch
                 updated_fields.append("base")
 
-            # Apply PR updates
+            # Apply PR updates (excluding draft - handled separately)
             if update_params:
                 pr.edit(**update_params)
+
+            # Handle draft status separately using GitHub CLI (PyGithub doesn't support it)
+            if draft is not None:
+                import subprocess
+                if draft:
+                    # Mark PR as draft (convert to draft)
+                    result = subprocess.run(
+                        ["gh", "pr", "ready", "--undo", str(pr_number), "-R", repo_full_name],
+                        capture_output=True,
+                        text=True
+                    )
+                else:
+                    # Mark PR as ready for review (remove draft status)
+                    result = subprocess.run(
+                        ["gh", "pr", "ready", str(pr_number), "-R", repo_full_name],
+                        capture_output=True,
+                        text=True
+                    )
+
+                if result.returncode == 0:
+                    updated_fields.append("draft")
+                else:
+                    return f"Failed to update draft status: {result.stderr}"
 
             # Handle labels and assignees via issue interface
             issue_params = {}

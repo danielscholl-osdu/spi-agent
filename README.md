@@ -250,6 +250,34 @@ By default, only Azure provider modules are analyzed. Use `--providers` to inclu
 - **Minor**: New features, backward compatible (2.5.x → 2.8.x) - Update when convenient
 - **Patch**: Bug fixes only (2.5.1 → 2.5.3) - Apply for security fixes
 
+### Session Management
+
+During long interactive sessions, you may need to clear the conversation context to:
+- Avoid context window overflow
+- Start a fresh conversation on a different topic
+- Clear cached workflow results from memory
+
+Use the `/clear` command to reset the chat session without restarting the agent:
+
+```bash
+You: /clear
+
+# Terminal clears, displays confirmation
+✓ Chat context cleared successfully
+
+Conversation history, workflow results, and activity tracker have been reset.
+You can now start a fresh conversation.
+```
+
+**The `/clear` command:**
+- Creates a new conversation thread
+- Clears all cached workflow results
+- Resets the activity tracker
+- Clears the terminal screen
+- Preserves agent configuration and tools
+
+**Note:** The `/clear` command is only available in interactive chat mode (`spi`). It is not available as a CLI subcommand (`spi clear`) or in single-query mode (`spi -p "query"`).
+
 
 ## Development & Testing
 

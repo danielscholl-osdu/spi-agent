@@ -29,7 +29,7 @@ class DirectTestRunner:
     def __init__(
         self,
         services: List[str],
-        provider: str = "core,core-plus,azure",
+        provider: str = "core,azure",
     ):
         self.services = services
         self.provider = provider

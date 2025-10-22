@@ -37,6 +37,15 @@ class ActivityTracker:
         """
         return self._current_activity
 
+    async def reset(self) -> None:
+        """Reset activity tracker to initial state.
+
+        This clears the current activity and returns it to the starting state.
+        Useful when clearing chat context to provide a clean slate.
+        """
+        async with self._lock:
+            self._current_activity = "Starting..."
+
     def format_tool_name(self, tool: str) -> str:
         """Format tool name for user-friendly display.
 

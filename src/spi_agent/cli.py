@@ -78,20 +78,10 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
-        console.print(f"\n[yellow]Executing fork workflow for: {', '.join(services)}[/yellow]\n")
-
         # Use workflow function to store results for agent context
         from spi_agent.workflows.vulns_workflow import run_fork_workflow
 
         result = await run_fork_workflow(services=services, branch=branch)
-
-        # Brief acknowledgment - agent will have access to full results via context injection
-        await agent.agent.run(
-            f"The fork workflow just completed for {', '.join(services)} (branch: {branch}). "
-            f"You now have access to the fork operation results. "
-            f"Acknowledge briefly and offer to help with next steps.",
-            thread=thread,
-        )
         return None
 
     if cmd == "status":
@@ -125,24 +115,18 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
-        # Display status message
-        if platform == "gitlab":
-            console.print(f"\n[yellow]Checking GitLab status for: {', '.join(services)} (providers: {providers})[/yellow]\n")
+        # Use workflow function to store results for agent context
+        from spi_agent.workflows.status_workflow import run_status_workflow
+
+        # Convert providers string to list for GitLab
+        providers_list = None
+        if platform == "gitlab" and providers:
             providers_list = [p.strip() for p in providers.split(",")]
-            runner = copilot_module.StatusRunner(None, services, providers_list)
-        else:
-            console.print(f"\n[yellow]Checking GitHub status for: {', '.join(services)}[/yellow]\n")
-            runner = copilot_module.StatusRunner(None, services)
 
-        await runner.run_direct()
-
-        # Brief acknowledgment - results were already displayed
-        platform_name = "GitLab" if platform == "gitlab" else "GitHub"
-        await agent.agent.run(
-            f"The {platform_name} status check just completed for {', '.join(services)}. "
-            f"The results were displayed above. "
-            f"Acknowledge briefly and offer to help analyze the status or address any issues.",
-            thread=thread,
+        result = await run_status_workflow(
+            services=services,
+            platform=platform,
+            providers=providers_list,
         )
         return None
 
@@ -151,7 +135,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             return "Usage: /test <service> [--provider <provider>]\nExample: /test partition --provider azure"
 
         services_arg = parts[1]
-        provider = "core,core-plus,azure"  # Default to comprehensive core + azure coverage
+        provider = "core,azure"  # Default to core + azure coverage
 
         # Parse --provider flag
         if "--provider" in parts:
@@ -167,20 +151,10 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
-        console.print(f"\n[yellow]Running Maven tests for: {', '.join(services)} (provider: {provider})[/yellow]\n")
-
         # Use workflow function to store results for agent context
         from spi_agent.workflows.vulns_workflow import run_test_workflow
 
         result = await run_test_workflow(services=services, provider=provider)
-
-        # Brief acknowledgment - agent will have access to full results via context injection
-        await agent.agent.run(
-            f"The test workflow just completed for {', '.join(services)}. "
-            f"You now have access to the test results. "
-            f"Acknowledge briefly and offer to help analyze the results or fix any issues.",
-            thread=thread,
-        )
         return None
 
     if cmd == "vulns":
@@ -190,16 +164,16 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         services_arg = parts[1]
         create_issue = "--create-issue" in parts
 
-        # Parse --severity flag (None = server scans all severities)
-        severity_filter = None
+        # Parse --severity flag (empty list = server scans all severities)
+        severity_filter = []
         if "--severity" in parts:
             severity_idx = parts.index("--severity")
             if severity_idx + 1 < len(parts):
                 severity_arg = parts[severity_idx + 1]
                 severity_filter = [s.strip().lower() for s in severity_arg.split(",")]
 
-        # Parse --providers flag (default: core-plus, azure)
-        providers = ["core-plus", "azure"]
+        # Parse --providers flag (default: azure; core is always included)
+        providers = ["azure"]
         if "--providers" in parts:
             providers_idx = parts.index("--providers")
             if providers_idx + 1 < len(parts):
@@ -219,36 +193,17 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
-        severity_str = ", ".join(severity_filter).upper() if severity_filter else "ALL"
-        console.print(f"\n[yellow]Running vulnerability analysis for: {', '.join(services)} (severity: {severity_str})[/yellow]\n")
-
         # Use workflow function to store results for agent context
         from spi_agent.workflows.vulns_workflow import run_vulns_workflow
 
-        try:
-            result = await run_vulns_workflow(
-                agent=agent,
-                services=services,
-                severity_filter=severity_filter,
-                providers=providers,
-                include_testing=include_testing,
-                create_issue=create_issue,
-            )
-
-            # Brief acknowledgment - agent will have access to full results via context injection
-            await agent.agent.run(
-                f"The vulnerability analysis just completed for {', '.join(services)}. "
-                f"You now have access to the full results including vulnerability counts and CVE analysis. "
-                f"Acknowledge briefly and offer to help analyze the findings.",
-                thread=thread,
-            )
-        except Exception as e:
-            await agent.agent.run(
-                f"The vulnerability analysis encountered an error: {str(e)}. "
-                f"Acknowledge this and offer to help troubleshoot.",
-                thread=thread,
-            )
-
+        result = await run_vulns_workflow(
+            agent=agent,
+            services=services,
+            severity_filter=severity_filter,
+            providers=providers,
+            include_testing=include_testing,
+            create_issue=create_issue,
+        )
         return None
 
     if cmd == "send":
@@ -339,8 +294,8 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
 
         services_arg = parts[1]
 
-        # Parse --providers flag (default: core-plus, azure)
-        providers = ["core-plus", "azure"]
+        # Parse --providers flag (default: azure; core is always included)
+        providers = ["azure"]
         if "--providers" in parts:
             providers_idx = parts.index("--providers")
             if providers_idx + 1 < len(parts):
@@ -361,9 +316,6 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
 
-        providers_str = ', '.join(providers)
-        console.print(f"\n[yellow]Analyzing dependencies for: {', '.join(services)} (providers: {providers_str})[/yellow]\n")
-
         # Use workflow function to store results for agent context
         from spi_agent.workflows.depends_workflow import run_depends_workflow
 
@@ -374,17 +326,28 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             include_testing=include_testing,
             create_issue=create_issue,
         )
-
-        # Brief acknowledgment - agent will have access to full results via context injection
-        await agent.agent.run(
-            f"The dependency analysis just completed for {', '.join(services)}. "
-            f"You now have access to the update analysis results. "
-            f"Acknowledge briefly and offer to help review or apply updates.",
-            thread=thread,
-        )
         return None
 
-    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /send, /depends, /help"
+    if cmd == "clear":
+        # Clear workflow result store
+        from spi_agent.workflows import get_result_store
+        from spi_agent.activity import get_activity_tracker
+        from spi_agent.utils.terminal import clear_screen
+
+        result_store = get_result_store()
+        await result_store.clear()
+
+        # Reset activity tracker
+        activity_tracker = get_activity_tracker()
+        await activity_tracker.reset()
+
+        # Clear terminal screen
+        clear_screen()
+
+        # Return special signal to indicate thread should be replaced
+        return "__CLEAR_CONTEXT__"
+
+    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /send, /depends, /clear, /help"
 
 
 def _render_help() -> None:
@@ -407,7 +370,7 @@ def _render_help() -> None:
 - "Analyze the pom.xml in partition for issues"
 - "Run vulnerability scan for partition and create issues for critical CVEs"
 
-**Slash Commands:**
+**Commands:**
 - `/fork <service>` - Fork service repository
 - `/fork <service>,<service>` - Fork multiple repositories
 - `/fork <service> --branch develop` - Fork with custom branch
@@ -415,7 +378,7 @@ def _render_help() -> None:
 - `/status <service>,<service>` - Check status for multiple repos
 - `/status <service> --platform gitlab` - Check GitLab status (providers: Azure,Core)
 - `/status <service> --platform gitlab --provider azure` - GitLab status (azure only)
-- `/test <service>` - Run Maven tests (default: core,core-plus,azure profiles)
+- `/test <service>` - Run Maven tests (default: core,azure profiles)
 - `/test <service> --provider aws` - Run tests with specific provider
 - `/vulns <service>` - Run dependency/vulnerability analysis
 - `/vulns <service> --create-issue` - Scan and create issues for vulnerabilities
@@ -426,10 +389,44 @@ def _render_help() -> None:
 - `/send <service> --pr <number>` - Send GitHub PR to GitLab as Merge Request
 - `/send <service> --issue <number>` - Send GitHub Issue to GitLab
 - `/send <service> --pr <num> --issue <num>` - Send both PR and Issue
+- `/clear` - Clear conversation context and reset chat session
 - `/help` - Show this help
 """
     console.print(Panel(Markdown(help_text), title="💡 Help", border_style="yellow"))
     console.print()
+
+
+async def _count_existing_repos(config: AgentConfig) -> int:
+    """Count how many configured repositories actually exist in GitHub.
+
+    Args:
+        config: Agent configuration with organization and repositories
+
+    Returns:
+        Number of repositories that exist
+    """
+    from spi_agent.github.direct_client import GitHubDirectClient
+
+    client = GitHubDirectClient(config)
+
+    # Check all repos in parallel
+    async def check_repo(service: str) -> bool:
+        """Check if a single repo exists."""
+        repo_name = config.get_repo_full_name(service)
+        try:
+            repo_info = await client._get_repo_info(repo_name)
+            return repo_info.get("exists", False)
+        except:
+            return False
+
+    # Check all repos concurrently
+    results = await asyncio.gather(
+        *[check_repo(service) for service in config.repositories],
+        return_exceptions=True
+    )
+
+    # Count successful checks (True values, not exceptions)
+    return sum(1 for r in results if r is True)
 
 
 async def run_chat_mode(quiet: bool = False) -> int:
@@ -447,17 +444,20 @@ async def run_chat_mode(quiet: bool = False) -> int:
             maven_status = "enabled" if maven_mcp.is_available else "disabled"
             tool_count = len(agent.github_tools) + len(maven_mcp.tools)
 
+            # Count existing repositories
+            existing_count = await _count_existing_repos(config)
+            total_count = len(config.repositories)
+
             header = f"""[cyan]Organization:[/cyan] {agent.config.organization}
 [cyan]Model:[/cyan]        {agent.config.azure_openai_deployment}
-[cyan]Repositories:[/cyan] {len(agent.config.repositories)} configured
-[cyan]Tools:[/cyan]        {tool_count} available (Maven MCP: {maven_status})
-[cyan]Memory:[/cyan]       Thread-based (within session)"""
+[cyan]Repositories:[/cyan] {existing_count}/{total_count}
+[cyan]Tools:[/cyan]        {tool_count} available (Maven MCP: {maven_status})"""
 
             console.print(Panel(header, title="🤖 SPI Agent - Interactive Mode", border_style="blue"))
             console.print()
             console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
             console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-            console.print("[dim]Slash commands: /fork, /status, /test, /vulns, /depends, /send[/dim]\n")
+            console.print("[dim]Commands: /fork, /status, /test, /vulns, /depends, /send, /clear[/dim]\n")
 
         thread = agent.agent.get_new_thread()
 
@@ -521,11 +521,17 @@ async def run_chat_mode(quiet: bool = False) -> int:
                     continue
 
                 if query.startswith("/"):
-                    if not COPILOT_AVAILABLE:
-                        console.print("\n[red]Slash commands require the optional Copilot workflows.[/red]\n")
+                    if not COPILOT_AVAILABLE and not query.startswith("/clear"):
+                        console.print("\n[red]Commands require the optional Copilot workflows.[/red]\n")
                         continue
 
                     error = await handle_slash_command(query, agent, thread)
+
+                    # Handle context clear - replace thread
+                    if error == "__CLEAR_CONTEXT__":
+                        thread = agent.agent.get_new_thread()
+                        continue
+
                     if error:
                         console.print(f"\n[red]{error}[/red]\n")
                     continue

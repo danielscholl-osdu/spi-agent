@@ -64,7 +64,7 @@ class DependsRunner(BaseRunner):
         """
         # Core is always included (it's the base, not a provider)
         # Providers are: core-plus, azure, aws, gcp, ibm
-        # Default providers: core-plus, azure
+        # Default providers: azure
 
         if not self.providers or self.providers == ["all"]:
             # If no providers specified or "all", include everything

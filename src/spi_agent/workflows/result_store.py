@@ -196,7 +196,59 @@ class WorkflowResultStore:
                 for svc, status in result.pr_status.items():
                     open_prs = status.get("open_prs", 0)
                     open_issues = status.get("open_issues", 0)
-                    lines.append(f"- {svc}: {open_prs} open PRs, {open_issues} open issues")
+                    workflows_needing_approval = status.get("workflows_needing_approval", 0)
+                    pr_details = status.get("pr_details", [])
+                    issue_details = status.get("issue_details", [])
+
+                    status_line = f"- {svc}: {open_prs} open PRs, {open_issues} open issues"
+                    if workflows_needing_approval > 0:
+                        status_line += f", {workflows_needing_approval} workflows need approval"
+                    lines.append(status_line)
+
+                    # Include details about ALL PRs (not just ones with pending workflows)
+                    if pr_details:
+                        for pr in pr_details:
+                            pr_num = pr.get("number")
+                            pr_title = pr.get("title", "")
+                            pr_state = pr.get("state", "").upper()
+                            is_draft = pr.get("is_draft", False)
+                            workflows_pending = pr.get("workflows_pending", 0)
+
+                            # Build PR description
+                            pr_desc = f"  - PR #{pr_num}"
+                            if is_draft:
+                                pr_desc += " (DRAFT)"
+                            pr_desc += f": {pr_title[:60]}"
+
+                            # Add workflow status if relevant
+                            if workflows_pending > 0:
+                                pr_desc += f" ({workflows_pending} workflows pending)"
+
+                            lines.append(pr_desc)
+
+                    # Include issue details with labels and assignees
+                    if issue_details:
+                        for issue in issue_details:
+                            issue_num = issue.get("number")
+                            issue_title = issue.get("title", "")
+                            labels = issue.get("labels", [])
+                            assignees = issue.get("assignees", [])
+
+                            # Build issue description
+                            issue_desc = f"  - Issue #{issue_num}: {issue_title[:60]}"
+
+                            # Add important labels
+                            if "human-required" in labels:
+                                issue_desc += " [HUMAN-REQUIRED]"
+
+                            # Add assignee info
+                            if assignees:
+                                if "Copilot" in assignees or "copilot-swe-agent" in assignees:
+                                    issue_desc += " (Assigned: Copilot)"
+                                else:
+                                    issue_desc += f" (Assigned: {', '.join(assignees)})"
+
+                            lines.append(issue_desc)
 
             elif result.workflow_type == "fork" and result.fork_status:
                 lines.append("")

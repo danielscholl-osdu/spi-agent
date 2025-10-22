@@ -215,6 +215,7 @@ class StatusRunner(BaseRunner):
                         "number": issue_number,
                         "labels": issue.get("labels", []),
                         "assignees": issue.get("assignees", []),
+                        "url": issue.get("html_url", issue.get("web_url", "")),  # GitHub uses html_url, GitLab uses web_url
                         "services": []
                     }
                 issue_groups[title]["services"].append(service_name)
@@ -227,11 +228,12 @@ class StatusRunner(BaseRunner):
                 assignees = ", ".join(data["assignees"]) if data["assignees"] else "Unassigned"
 
                 # Highlight human-required issues
+                url = data["url"]
                 if "human-required" in data["labels"]:
-                    issue_content.append(f"[bold red]#{data['number']}[/bold red] {title}")
+                    issue_content.append(f"[link={url}][bold red]#{data['number']}[/bold red][/link] {title}")
                     issue_content.append("   [red]⚠ Requires manual intervention[/red]")
                 else:
-                    issue_content.append(f"[yellow]#{data['number']}[/yellow] {title}")
+                    issue_content.append(f"[link={url}][yellow]#{data['number']}[/yellow][/link] {title}")
 
                 if len(data["services"]) > 1:
                     issue_content.append(f"   Affects: [cyan]{services}[/cyan]")
@@ -287,6 +289,7 @@ class StatusRunner(BaseRunner):
                 state = pr.get("state", "unknown").upper()
                 is_release = pr.get("is_release", False)
                 author = pr.get("author", "unknown")
+                pr_url = pr.get("html_url", pr.get("web_url", ""))
 
                 # Detect Copilot authorship
                 is_copilot_pr = "copilot" in branch.lower() or author == "app/copilot-swe-agent"
@@ -295,11 +298,11 @@ class StatusRunner(BaseRunner):
                 # Use ! prefix for GitLab MRs, # for GitHub PRs
                 pr_prefix = "!" if is_gitlab else "#"
                 if is_draft:
-                    pr_content.append(f"[yellow]{pr_prefix}{pr_number}[/yellow] [dim](Draft)[/dim] {title}")
+                    pr_content.append(f"[link={pr_url}][yellow]{pr_prefix}{pr_number}[/yellow][/link] [dim](Draft)[/dim] {title}")
                 elif is_release:
-                    pr_content.append(f"[magenta]{pr_prefix}{pr_number}[/magenta] [bold]🚀 {title}[/bold]")
+                    pr_content.append(f"[link={pr_url}][magenta]{pr_prefix}{pr_number}[/magenta][/link] [bold]🚀 {title}[/bold]")
                 else:
-                    pr_content.append(f"[cyan]{pr_prefix}{pr_number}[/cyan] {title}")
+                    pr_content.append(f"[link={pr_url}][cyan]{pr_prefix}{pr_number}[/cyan][/link] {title}")
 
                 # Show author for all PRs
                 if is_copilot_pr:
@@ -310,6 +313,36 @@ class StatusRunner(BaseRunner):
                 # Show state and branch
                 state_display = f"[yellow]{state}[/yellow]" if is_draft else f"[green]{state}[/green]"
                 pr_content.append(f"   State: {state_display} | Branch: [dim]{branch}[/dim]")
+
+                # Show review and merge status (GitHub only - has this data)
+                if not is_gitlab:
+                    mergeable_state = pr.get("mergeable_state")
+                    approved_count = pr.get("approved_count", 0)
+                    changes_requested = pr.get("changes_requested", False)
+
+                    # Build merge status line
+                    status_parts = []
+
+                    # Review status
+                    if changes_requested:
+                        status_parts.append("[red]✗ Changes requested[/red]")
+                    elif approved_count > 0:
+                        status_parts.append(f"[green]✓ {approved_count} approval(s)[/green]")
+                    else:
+                        status_parts.append("[dim]⊙ No reviews[/dim]")
+
+                    # Mergeable status
+                    if mergeable_state == "blocked":
+                        status_parts.append("[red]⊘ Blocked[/red]")
+                    elif mergeable_state == "dirty":
+                        status_parts.append("[red]⚠ Conflicts[/red]")
+                    elif mergeable_state == "unstable":
+                        status_parts.append("[yellow]⚠ Checks failing[/yellow]")
+                    elif mergeable_state == "clean":
+                        status_parts.append("[green]✓ Ready[/green]")
+
+                    if status_parts:
+                        pr_content.append(f"   Merge: {' | '.join(status_parts)}")
 
                 # ONLY show workflow status for Copilot PRs (they require approval)
                 if is_copilot_pr:
@@ -363,6 +396,8 @@ class StatusRunner(BaseRunner):
             workflow_table.add_column("Service", style="cyan", no_wrap=True)
             workflow_table.add_column("Workflow", style="white")
             workflow_table.add_column("Status", style="magenta")
+            if not is_gitlab:
+                workflow_table.add_column("PR", style="dim", no_wrap=True)
             workflow_table.add_column("When", style="dim")
 
             for service_name, service_data in services_data.items():
@@ -377,6 +412,15 @@ class StatusRunner(BaseRunner):
                     # For GitHub: Use global workflows list
                     workflows = service_data.get("workflows", {}).get("recent", [])
                     pipeline_to_mr = {}
+
+                    # Create mapping of workflow head_branch to PR number
+                    branch_to_pr = {}
+                    prs = service_data.get("pull_requests", {}).get("items", [])
+                    for pr in prs:
+                        head_branch = pr.get("headRefName")  # Direct client uses headRefName
+                        pr_number = pr.get("number")
+                        if head_branch and pr_number:
+                            branch_to_pr[head_branch] = pr_number
 
                 if workflows:
                     for idx, workflow in enumerate(workflows[:10]):  # Show up to 10 MR-related pipelines
@@ -408,6 +452,11 @@ class StatusRunner(BaseRunner):
                             name = workflow.get("name", "Unknown")
                             status = workflow.get("status", "unknown")
                             conclusion = workflow.get("conclusion", "")
+                            head_branch = workflow.get("head_branch", "")
+
+                            # Get PR number for this workflow's branch
+                            pr_number = branch_to_pr.get(head_branch)
+                            pr_display = f"#{pr_number}" if pr_number else ""
 
                             # Format status
                             # Note: action_required is a CONCLUSION, not a status
@@ -443,12 +492,21 @@ class StatusRunner(BaseRunner):
                         except:
                             time_str = "recently"
 
-                        workflow_table.add_row(
-                            service_name if idx == 0 else "",
-                            name,
-                            status_display,
-                            time_str
-                        )
+                        if is_gitlab:
+                            workflow_table.add_row(
+                                service_name if idx == 0 else "",
+                                name,
+                                status_display,
+                                time_str
+                            )
+                        else:
+                            workflow_table.add_row(
+                                service_name if idx == 0 else "",
+                                name,
+                                status_display,
+                                pr_display,
+                                time_str
+                            )
 
             console.print(workflow_table)
             console.print()
@@ -721,9 +779,8 @@ class StatusRunner(BaseRunner):
             if approval_needed:
                 total_approval = sum(approval_needed.values())
                 services_list = ", ".join(approval_needed.keys())
-                next_steps.append(f"[red bold]⊙ {total_approval} workflow(s) need approval (manual)[/red bold]")
+                next_steps.append(f"[red bold]⊙ {total_approval} workflow(s) need approval[/red bold]")
                 next_steps.append(f"  Services: {services_list}")
-                next_steps.append(f"  💡 Approve in GitHub UI for Copilot PRs to continue")
 
             # Check for running workflows
             total_running = sum(
@@ -744,10 +801,6 @@ class StatusRunner(BaseRunner):
                 border_style="blue"
             ))
             console.print()
-
-        # Timestamp footer
-        console.print(f"[dim]Status retrieved at: {timestamp}[/dim]")
-        console.print()
 
     def show_config(self):
         """Display run configuration"""
