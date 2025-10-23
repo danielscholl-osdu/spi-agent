@@ -79,7 +79,7 @@ class DirectTestRunner:
             config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
 [cyan]Provider:[/cyan]   {provider_display}"""
 
-        console.print(Panel(config_text, title="🧪 Maven Test Execution", border_style="blue"))
+        console.print(Panel(config_text, title="Test Execution", border_style="blue"))
         console.print()
 
     async def _run_maven_command(
@@ -998,7 +998,7 @@ class DirectTestRunner:
             border_color_map = {5: "green", 4: "blue", 3: "yellow", 2: "orange1", 1: "red"}
             border_color = border_color_map.get(worst_grade_value, "cyan")
 
-        profile_info = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''} × {len(self.profiles)} profiles"
+        profile_info = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''} x {len(self.profiles)} profiles"
 
         if total_tests > 0:
             if total_failed > 0:
@@ -1011,7 +1011,7 @@ class DirectTestRunner:
 
         return Panel(
             table,
-            title="📊 Test Results",
+            title="Test Results",
             subtitle=subtitle,
             border_style=border_color,
             padding=(1, 2)
@@ -1081,7 +1081,7 @@ class DirectTestRunner:
 
         return Panel(
             table,
-            title="📊 Test Results",
+            title="Test Results",
             border_style="cyan"
         )
 
@@ -1101,22 +1101,16 @@ class DirectTestRunner:
             # Post-processing outside Live context
             console.print()
 
-            # Generate coverage reports
-            console.print("📊 Generating Coverage Reports...")
+            # Generate coverage reports (silent)
             for service in self.services:
                 self.tracker.update(service, "coverage", "Generating coverage", phase="coverage")
-                console.print(f"  → {service}: generating coverage…")
 
                 success, message = self._generate_coverage_for_service(service)
 
                 if success:
-                    console.print(f"    ✓ {service}: {message}")
                     self.tracker.update(service, "test_success", message, phase="coverage")
                 else:
-                    console.print(f"    ⚠ {service}: {message}")
                     self.tracker.update(service, "test_success", f"Coverage: {message}", phase="coverage")
-
-            console.print("Coverage generation complete\n")
 
             # Extract coverage from reports
             self._extract_coverage_from_reports()

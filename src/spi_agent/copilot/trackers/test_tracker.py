@@ -19,7 +19,7 @@ class TestTracker(BaseTracker):
     @property
     def table_title(self) -> str:
         """Return the title for the status table."""
-        return "Service Status"
+        return "[italic]Service Status[/italic]"
 
     @property
     def status_icons(self) -> Dict[str, str]:
@@ -174,11 +174,11 @@ class TestTracker(BaseTracker):
 
     def get_table(self) -> Table:
         """Generate Rich table of test status"""
-        table = Table(title="Service Status", expand=True)
+        table = Table(title="[italic]Service Status[/italic]", expand=True)
         table.add_column("Service", style="cyan", no_wrap=True)
         table.add_column("Status", style="yellow")
-        table.add_column("P", style="green", justify="right", no_wrap=True)
-        table.add_column("F", style="red", justify="right", no_wrap=True)
+        table.add_column("Passed", style="green", justify="right", no_wrap=True)
+        table.add_column("Failed", style="red", justify="right", no_wrap=True)
 
         for service, data in self.services.items():
             status_style = {

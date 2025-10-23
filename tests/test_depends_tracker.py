@@ -107,7 +107,7 @@ def test_depends_tracker_get_table():
     table = tracker.get_table()
 
     # Check table has correct title
-    assert "Dependency Update Analysis Status" in table.title
+    assert "Service Status" in table.title
 
     # Check table has correct columns
     assert len(table.columns) == 5  # Service, Status, Major, Minor, Patch
@@ -116,7 +116,7 @@ def test_depends_tracker_get_table():
 def test_depends_tracker_table_title():
     """Test DependsTracker has correct table title."""
     tracker = DependsTracker(["partition"])
-    assert tracker.table_title == "📦 Dependency Update Analysis Status"
+    assert tracker.table_title == "[italic]Service Status[/italic]"
 
 
 def test_depends_tracker_with_modules():

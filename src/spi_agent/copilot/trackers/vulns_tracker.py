@@ -14,7 +14,7 @@ class VulnsTracker(BaseTracker):
     @property
     def table_title(self) -> str:
         """Return the title for the status table."""
-        return "🔍 Vulnerability Analysis Status"
+        return "[italic]Service Status[/italic]"
 
     @property
     def status_icons(self) -> Dict[str, str]:

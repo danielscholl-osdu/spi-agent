@@ -63,8 +63,8 @@ class VulnsRunner(BaseRunner):
         Returns:
             Instructions for which modules to analyze
         """
-        # Core modules are always included
-        modules_to_analyze = ["core", "core-plus"]
+        # Core module is always included
+        modules_to_analyze = ["core"]
 
         # Add requested providers
         modules_to_analyze.extend(self.providers)
@@ -213,7 +213,7 @@ Do NOT include other providers or testing modules unless specified.
             self.tracker.update(service, "scanning", "Running vulnerability scan...")
 
             # Add scan initiation to output panel
-            modules_to_analyze = ["core", "core-plus"] + self.providers
+            modules_to_analyze = ["core"] + self.providers
             if self.include_testing:
                 modules_to_analyze.append("testing")
 
@@ -917,7 +917,7 @@ Do NOT include other providers or testing modules unless specified.
 
         return Panel(
             table,
-            title="🛡️ Security Assessment",
+            title="Security Assessment",
             subtitle=subtitle,
             border_style=border_color,
             padding=(1, 2)
@@ -999,15 +999,14 @@ Do NOT include other providers or testing modules unless specified.
         if not cve_analysis:
             return Panel(
                 "[dim]CVE analysis not available yet...[/dim]",
-                title="🔍 Priority CVE Report",
+                title="Vulnerability Analysis",
                 border_style="blue"
             )
 
         # Display agent analysis directly (it's already well-formatted)
         return Panel(
             cve_analysis,
-            title="🔍 Priority CVE Report",
-            subtitle="Cross-service vulnerabilities listed first",
+            title="Vulnerability Analysis",
             border_style="blue",
             padding=(1, 2)
         )
@@ -1019,7 +1018,6 @@ Do NOT include other providers or testing modules unless specified.
             Exit code (0 for success, 1 for error)
         """
         self.show_config()
-        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
 
         # Create layout
         layout = self.create_layout()
@@ -1136,8 +1134,6 @@ Do NOT include other providers or testing modules unless specified.
 
                 f.write("\n=== FULL OUTPUT ===\n\n")
                 f.write("\n".join(self.full_output))
-
-            console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
         except Exception as e:
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 

@@ -9,7 +9,7 @@ from rich.text import Text
 
 def create_output_panel(
     output_lines: Union[deque, list],
-    title: str = "📋 Agent Output",
+    title: str = "Agent Output",
     border_style: str = "blue"
 ) -> Panel:
     """Create a panel with scrolling output and consistent formatting.

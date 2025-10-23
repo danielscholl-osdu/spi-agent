@@ -74,12 +74,18 @@ class CopilotRunner(BaseRunner):
 
     def show_config(self):
         """Display run configuration"""
-        config_text = f"""[cyan]Services:[/cyan]   {', '.join(self.services)}
+        # Show full repo path for single service, org + services list for multiple
+        if len(self.services) == 1:
+            config_text = f"""[cyan]Repository:[/cyan] {config.organization}/{self.services[0]}
 [cyan]Branch:[/cyan]     {self.branch}
-[cyan]Template:[/cyan]   azure/osdu-spi
-[cyan]Mode:[/cyan]       Direct API"""
+[cyan]Template:[/cyan]   azure/osdu-spi"""
+        else:
+            config_text = f"""[cyan]Organization:[/cyan] {config.organization}
+[cyan]Services:[/cyan]     {', '.join(self.services)}
+[cyan]Branch:[/cyan]       {self.branch}
+[cyan]Template:[/cyan]     azure/osdu-spi"""
 
-        console.print(Panel(config_text, title="🔱 Repository Fork", border_style="blue"))
+        console.print(Panel(config_text, title="Fork", border_style="blue"))
         console.print()
 
     def parse_output(self, line: str) -> None:

@@ -509,6 +509,7 @@ class GitLabDirectClient:
             "name": job.name,
             "stage": job.stage,
             "status": job.status,
+            "allow_failure": job.allow_failure if hasattr(job, "allow_failure") else False,
             "duration": job.duration if hasattr(job, "duration") else None,
             "web_url": job.web_url if hasattr(job, "web_url") else None,
         }

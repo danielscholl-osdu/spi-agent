@@ -117,7 +117,7 @@ IMPORTANT: "core" is always analyzed as the base dependency. Providers are: core
 [cyan]Testing:[/cyan]      {testing_str}
 [cyan]Create Issue:[/cyan] {'Yes' if self.create_issue else 'No'}"""
 
-        console.print(Panel(config_text, title="📦 Dependency Update Analysis", border_style="blue"))
+        console.print(Panel(config_text, title="Dependency Update Analysis", border_style="blue"))
         console.print()
 
     def parse_output(self, line: str) -> None:
@@ -645,7 +645,7 @@ IMPORTANT: "core" is always analyzed as the base dependency. Providers are: core
 
         return Panel(
             table,
-            title="📦 Dependency Assessment",
+            title="Dependency Assessment",
             subtitle=subtitle,
             border_style="blue",
             padding=(1, 2)
@@ -748,7 +748,7 @@ IMPORTANT: "core" is always analyzed as the base dependency. Providers are: core
         subtitle = f"Showing top {min(len(all_updates), 15)} of {len(all_updates)} updates"
         return Panel(
             table,
-            title="📋 Dependency Updates Summary",
+            title="Dependency Versions",
             subtitle=subtitle,
             border_style="yellow",
             padding=(1, 2)
@@ -832,15 +832,14 @@ IMPORTANT: "core" is always analyzed as the base dependency. Providers are: core
         if not dependency_analysis:
             return Panel(
                 "[dim]Dependency analysis not available yet...[/dim]",
-                title="📋 Update Recommendations",
+                title="Dependency Analysis",
                 border_style="blue"
             )
 
         # Display agent analysis directly
         return Panel(
             dependency_analysis,
-            title="📋 Update Recommendations",
-            subtitle="Cross-service dependency updates prioritized",
+            title="Dependency Analysis",
             border_style="blue",
             padding=(1, 2)
         )
@@ -879,7 +878,6 @@ IMPORTANT: "core" is always analyzed as the base dependency. Providers are: core
             Exit code (0 for success, 1 for error)
         """
         self.show_config()
-        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
 
         # Create layout
         layout = self.create_layout()
@@ -1018,8 +1016,6 @@ IMPORTANT: "core" is always analyzed as the base dependency. Providers are: core
                     self._append_to_log(f"  Report ID: {data['report_id']}")
                 self._append_to_log(f"  Details: {data['details']}")
                 self._append_to_log("")
-
-            console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
         except Exception as e:
             console.print(f"[dim]Warning: Could not finalize log: {e}[/dim]")
 
@@ -1069,8 +1065,6 @@ IMPORTANT: "core" is always analyzed as the base dependency. Providers are: core
 
                 f.write("\n=== FULL OUTPUT ===\n\n")
                 f.write("\n".join(self.full_output))
-
-            console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
         except Exception as e:
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 

@@ -90,7 +90,7 @@ class StatusRunner(BaseRunner):
                 mr_pipelines[service_name] = pipelines_list
 
         # Summary Table
-        table_title = "📊 GitLab Status Summary" if is_gitlab else "📊 GitHub Status Summary"
+        table_title = "[italic]Service Status[/italic]"
         summary_table = Table(title=table_title, expand=True)
         summary_table.add_column("Service", style="cyan", no_wrap=True)
         summary_table.add_column("Issues", style="yellow")
@@ -256,7 +256,7 @@ class StatusRunner(BaseRunner):
 
             console.print(Panel(
                 "\n".join(issue_content),
-                title="📝 Open Issues",
+                title="Open Issues",
                 border_style="yellow"
             ))
             console.print()
@@ -300,7 +300,7 @@ class StatusRunner(BaseRunner):
                 if is_draft:
                     pr_content.append(f"[link={pr_url}][yellow]{pr_prefix}{pr_number}[/yellow][/link] [dim](Draft)[/dim] {title}")
                 elif is_release:
-                    pr_content.append(f"[link={pr_url}][magenta]{pr_prefix}{pr_number}[/magenta][/link] [bold]🚀 {title}[/bold]")
+                    pr_content.append(f"[link={pr_url}][magenta]{pr_prefix}{pr_number}[/magenta][/link] [bold]{title}[/bold]")
                 else:
                     pr_content.append(f"[link={pr_url}][cyan]{pr_prefix}{pr_number}[/cyan][/link] {title}")
 
@@ -367,7 +367,7 @@ class StatusRunner(BaseRunner):
 
                 pr_content.append("")
 
-            panel_title = "🔀 Open Merge Requests" if is_gitlab else "🔀 Open Pull Requests"
+            panel_title = "Open Merge Requests" if is_gitlab else "Open Pull Requests"
             console.print(Panel(
                 "\n".join(pr_content),
                 title=panel_title,
@@ -391,7 +391,7 @@ class StatusRunner(BaseRunner):
             )
 
         if has_workflows:
-            table_title = "⚙️ MR Pipeline Runs" if is_gitlab else "⚙️ Recent Workflow Runs"
+            table_title = "MR Pipeline Runs" if is_gitlab else "[italic]Action Status[/italic]"
             workflow_table = Table(title=table_title, expand=True)
             workflow_table.add_column("Service", style="cyan", no_wrap=True)
             workflow_table.add_column("Workflow", style="white")
@@ -509,7 +509,6 @@ class StatusRunner(BaseRunner):
                             )
 
             console.print(workflow_table)
-            console.print()
 
         # Failed Pipeline Jobs Section (GitLab only)
         if is_gitlab:
@@ -537,7 +536,7 @@ class StatusRunner(BaseRunner):
                     # Create job table grouped by stage
                     job_table = Table(
                         title=f"❌ Failed Jobs - {service_name} Pipeline #{pipeline_id} (MR !{mr_iid})",
-                        expand=False
+                        expand=True
                     )
                     job_table.add_column("Stage", style="cyan", no_wrap=True)
                     job_table.add_column("Job Name", style="white")
@@ -584,12 +583,17 @@ class StatusRunner(BaseRunner):
                                 job_name = job.get("name", "Unknown")
                                 status = job.get("status", "unknown")
                                 duration = job.get("duration", 0)
+                                allow_failure = job.get("allow_failure", False)
 
                                 # Format status
                                 if status == "success":
                                     status_display = "[green]✓ success[/green]"
                                 elif status == "failed":
-                                    status_display = "[red]✗ failed[/red]"
+                                    # If allow_failure is True, show as warning instead of failure
+                                    if allow_failure:
+                                        status_display = "[yellow]⚠ warning[/yellow]"
+                                    else:
+                                        status_display = "[red]✗ failed[/red]"
                                 elif status == "canceled":
                                     status_display = "[yellow]⊘ canceled[/yellow]"
                                 elif status == "skipped":
@@ -649,12 +653,17 @@ class StatusRunner(BaseRunner):
                                 job_name = "  " + job.get("name", "Unknown")  # Indent downstream jobs
                                 status = job.get("status", "unknown")
                                 duration = job.get("duration", 0)
+                                allow_failure = job.get("allow_failure", False)
 
                                 # Format status
                                 if status == "success":
                                     status_display = "[green]✓ success[/green]"
                                 elif status == "failed":
-                                    status_display = "[red]✗ failed[/red]"
+                                    # If allow_failure is True, show as warning instead of failure
+                                    if allow_failure:
+                                        status_display = "[yellow]⚠ warning[/yellow]"
+                                    else:
+                                        status_display = "[red]✗ failed[/red]"
                                 elif status == "canceled":
                                     status_display = "[yellow]⊘ canceled[/yellow]"
                                 elif status == "skipped":
@@ -701,7 +710,7 @@ class StatusRunner(BaseRunner):
 
         if missing_repos:
             next_steps.append(f"[yellow]⚠[/yellow] {len(missing_repos)} service(s) not found: {', '.join(missing_repos)}")
-            next_steps.append(f"  💡 Run: /fork {','.join(missing_repos)} to initialize")
+            next_steps.append(f"  Run: /fork {','.join(missing_repos)} to initialize")
 
         # Check for human-required issues
         human_required = [
@@ -717,7 +726,7 @@ class StatusRunner(BaseRunner):
 
         # Check for release PRs
         if release_prs:
-            next_steps.append(f"[magenta]🚀[/magenta] Review {len(release_prs)} release PR(s) for merging")
+            next_steps.append(f"[yellow]⚠[/yellow] Review {len(release_prs)} release PR(s) for merging")
 
         # Check for workflows/pipelines needing attention
         workflows_key = "pipelines" if is_gitlab else "workflows"
@@ -797,7 +806,7 @@ class StatusRunner(BaseRunner):
         if next_steps and not is_gitlab:
             console.print(Panel(
                 "\n".join(next_steps),
-                title="💡 Next Steps",
+                title="Next Steps",
                 border_style="blue"
             ))
             console.print()

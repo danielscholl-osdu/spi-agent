@@ -190,7 +190,7 @@ class BaseRunner(ABC):
                 else:
                     output_text.append(line + "\n", style="white")
 
-        return Panel(output_text, title="📋 Agent Output", border_style="blue", height=panel_height)
+        return Panel(output_text, title="Agent Output", border_style="blue", height=panel_height)
 
     @abstractmethod
     def show_config(self) -> None:
@@ -206,7 +206,6 @@ class BaseRunner(ABC):
         global current_process
 
         self.show_config()
-        console.print(f"[dim]Logging to: {self.log_file}[/dim]\n")
 
         prompt_content = self.load_prompt()
 
@@ -300,8 +299,6 @@ class BaseRunner(ABC):
                 f.write(f"Exit Code: {return_code}\n")
                 f.write(f"{'='*70}\n\n")
                 f.write("\n".join(self.full_output))
-
-            console.print(f"\n[dim]✓ Log saved to: {self.log_file}[/dim]")
         except Exception as e:
             console.print(f"[dim]Warning: Could not save log: {e}[/dim]")
 

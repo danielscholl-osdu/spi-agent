@@ -102,7 +102,7 @@ class TestVulnsTracker:
 
         table = tracker.get_table()
 
-        assert table.title == "🔍 Triage Status"
+        assert table.title == "[italic]Service Status[/italic]"
         assert len(table.columns) == 5  # Service, Status, Critical, High, Medium
 
     def test_status_icons(self):
@@ -250,7 +250,7 @@ class TestVulnsRunner:
         panel = runner.get_results_panel(0)
 
         # Panel should be security assessment panel
-        assert panel.title == "🛡️ Security Assessment"
+        assert panel.title == "Security Assessment"
         # With 3 critical total, border should be red
         assert panel.border_style == "red"
 
@@ -263,7 +263,7 @@ class TestVulnsRunner:
         panel = runner.get_results_panel(0)
 
         # Panel should be security assessment panel
-        assert panel.title == "🛡️ Security Assessment"
+        assert panel.title == "Security Assessment"
         # With no critical but 5 high (< 20), border should be blue
         assert panel.border_style == "blue"
 
@@ -276,7 +276,7 @@ class TestVulnsRunner:
         panel = runner.get_results_panel(0)
 
         # Panel should be security assessment panel
-        assert panel.title == "🛡️ Security Assessment"
+        assert panel.title == "Security Assessment"
         # With no vulnerabilities, grade should be A, green border
         assert panel.border_style == "green"
 

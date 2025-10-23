@@ -328,26 +328,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         )
         return None
 
-    if cmd == "clear":
-        # Clear workflow result store
-        from spi_agent.workflows import get_result_store
-        from spi_agent.activity import get_activity_tracker
-        from spi_agent.utils.terminal import clear_screen
-
-        result_store = get_result_store()
-        await result_store.clear()
-
-        # Reset activity tracker
-        activity_tracker = get_activity_tracker()
-        await activity_tracker.reset()
-
-        # Clear terminal screen
-        clear_screen()
-
-        # Return special signal to indicate thread should be replaced
-        return "__CLEAR_CONTEXT__"
-
-    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /send, /depends, /clear, /help"
+    return f"Unknown command: /{cmd}\nAvailable: /fork, /status, /test, /vulns, /send, /depends (or type 'help')"
 
 
 def _render_help() -> None:
@@ -389,8 +370,8 @@ def _render_help() -> None:
 - `/send <service> --pr <number>` - Send GitHub PR to GitLab as Merge Request
 - `/send <service> --issue <number>` - Send GitHub Issue to GitLab
 - `/send <service> --pr <num> --issue <num>` - Send both PR and Issue
-- `/clear` - Clear conversation context and reset chat session
-- `/help` - Show this help
+- `clear` - Clear conversation context and reset chat session
+- `help` - Show this help
 """
     console.print(Panel(Markdown(help_text), title="💡 Help", border_style="yellow"))
     console.print()
@@ -441,23 +422,14 @@ async def run_chat_mode(quiet: bool = False) -> int:
         agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
 
         if not quiet:
-            maven_status = "enabled" if maven_mcp.is_available else "disabled"
-            tool_count = len(agent.github_tools) + len(maven_mcp.tools)
-
             # Count existing repositories
             existing_count = await _count_existing_repos(config)
             total_count = len(config.repositories)
 
-            header = f"""[cyan]Organization:[/cyan] {agent.config.organization}
-[cyan]Model:[/cyan]        {agent.config.azure_openai_deployment}
-[cyan]Repositories:[/cyan] {existing_count}/{total_count}
-[cyan]Tools:[/cyan]        {tool_count} available (Maven MCP: {maven_status})"""
-
-            console.print(Panel(header, title="🤖 SPI Agent - Interactive Mode", border_style="blue"))
+            console.print(f"[cyan][◉‿◉] SPI Agent[/cyan]")
+            console.print(f"[blue]{agent.config.organization}[/blue] | [green]{existing_count}/{total_count} repos[/green]")
             console.print()
-            console.print("[dim]Type 'exit', 'quit', or press Ctrl+D to end session[/dim]")
-            console.print("[dim]Type 'help' or '/help' for available commands[/dim]")
-            console.print("[dim]Commands: /fork, /status, /test, /vulns, /depends, /send, /clear[/dim]\n")
+            console.print("[dim]Type 'help' for available commands and 'exit' to quit[/dim]\n")
 
         thread = agent.agent.get_new_thread()
 
@@ -477,13 +449,13 @@ async def run_chat_mode(quiet: bool = False) -> int:
             session = PromptSession(
                 history=InMemoryHistory(),
                 style=PromptStyle.from_dict({
-                    'prompt': 'cyan bold',
+                    'prompt': 'green bold',
                 }),
                 enable_history_search=True,
                 mouse_support=False,  # Disable mouse to avoid conflicts
                 color_depth=ColorDepth.TRUE_COLOR,
             )
-            prompt_tokens = FormattedText([('class:prompt', 'You: ')])
+            prompt_tokens = FormattedText([('class:prompt', '> ')])
             patch_stdout = pt_patch_stdout
             use_prompt_toolkit = True
         except ImportError:
@@ -505,7 +477,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
                 else:
                     # Fallback to standard input running in a background thread so
                     # readline-based editing (arrows, backspace) remains usable.
-                    prompt_text = "You: "
+                    prompt_text = "> "
                     query = await asyncio.to_thread(input, prompt_text)
                     query = query.strip()
 
@@ -520,17 +492,37 @@ async def run_chat_mode(quiet: bool = False) -> int:
                     _render_help()
                     continue
 
+                if query.lower() in ["clear", "/clear"]:
+                    # Clear workflow result store
+                    from spi_agent.workflows import get_result_store
+                    from spi_agent.activity import get_activity_tracker
+                    from spi_agent.utils.terminal import clear_screen
+
+                    result_store = get_result_store()
+                    await result_store.clear()
+
+                    # Reset activity tracker
+                    activity_tracker = get_activity_tracker()
+                    await activity_tracker.reset()
+
+                    # Clear terminal screen
+                    clear_screen()
+
+                    # Reprint banner
+                    if not quiet:
+                        console.print(f"[cyan][◉‿◉] SPI Agent[/cyan]")
+                        console.print()
+
+                    # Replace thread
+                    thread = agent.agent.get_new_thread()
+                    continue
+
                 if query.startswith("/"):
-                    if not COPILOT_AVAILABLE and not query.startswith("/clear"):
+                    if not COPILOT_AVAILABLE:
                         console.print("\n[red]Commands require the optional Copilot workflows.[/red]\n")
                         continue
 
                     error = await handle_slash_command(query, agent, thread)
-
-                    # Handle context clear - replace thread
-                    if error == "__CLEAR_CONTEXT__":
-                        thread = agent.agent.get_new_thread()
-                        continue
 
                     if error:
                         console.print(f"\n[red]{error}[/red]\n")
@@ -542,7 +534,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
                 activity_tracker = get_activity_tracker()
 
                 # Create async task to update status dynamically
-                status_handle = console.status("[bold blue]Starting...[/bold blue]", spinner="dots")
+                status_handle = console.status("[bold blue]Thinking...[/bold blue]", spinner="dots")
                 status_handle.start()
 
                 async def update_status():
@@ -575,7 +567,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
                 console.print(
                     Panel(
                         Markdown(result_text),
-                        title="[bold green]SPI Agent[/bold green]",
+                        title="[bold green][◉‿◉][/bold green]",
                         border_style="green",
                         padding=(1, 2),
                     )
@@ -612,7 +604,7 @@ async def run_single_query(prompt: str, quiet: bool = False) -> int:
                     f"[cyan]Model:[/cyan] {agent.config.azure_openai_deployment}\n"
                     f"[cyan]Maven MCP:[/cyan] {maven_status}\n"
                     f"[cyan]Query:[/cyan] {prompt}",
-                    title="🤖 SPI Agent",
+                    title="[◉‿◉]",
                     border_style="blue",
                 )
             )

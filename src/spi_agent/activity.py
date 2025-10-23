@@ -17,7 +17,7 @@ class ActivityTracker:
 
     def __init__(self):
         """Initialize activity tracker."""
-        self._current_activity = "Starting..."
+        self._current_activity = "Thinking..."
         self._lock = asyncio.Lock()
 
     async def update(self, activity: str) -> None:
@@ -44,7 +44,7 @@ class ActivityTracker:
         Useful when clearing chat context to provide a clean slate.
         """
         async with self._lock:
-            self._current_activity = "Starting..."
+            self._current_activity = "Thinking..."
 
     def format_tool_name(self, tool: str) -> str:
         """Format tool name for user-friendly display.
