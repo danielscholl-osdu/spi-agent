@@ -368,8 +368,8 @@ class CopilotRunner(BaseRunner):
 
             # Add repository URL for successful/skipped services
             if status in ["success", "skipped"]:
-                repo_url = f"github.com/{config.organization}/{service}"
-                result = f"{details}\n[dim]{repo_url}[/dim]"
+                repo_url = f"https://github.com/{config.organization}/{service}"
+                result = f"{details}\n[link={repo_url}][dim]github.com/{config.organization}/{service}[/dim][/link]"
             else:
                 result = details
 
