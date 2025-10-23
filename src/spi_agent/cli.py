@@ -7,7 +7,7 @@ import asyncio
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -85,11 +85,6 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         return None
 
     if cmd == "status":
-        if len(parts) < 2:
-            return "Usage: /status <service> [--platform github|gitlab] [--provider <providers>]\nExamples:\n  /status partition\n  /status partition --platform gitlab --provider azure"
-
-        services_arg = parts[1]
-
         # Parse --platform flag (default: github)
         platform = "github"
         if "--platform" in parts:
@@ -110,7 +105,26 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if platform == "gitlab" and providers is None:
             providers = "Azure,Core"  # Default for GitLab
 
-        services = copilot_module.parse_services(services_arg)
+        # Auto-detect services if not specified
+        services_arg = None
+        available_services = None
+
+        # Check if service is specified (not a flag)
+        if len(parts) >= 2 and not parts[1].startswith("--"):
+            services_arg = parts[1]
+        else:
+            # Auto-detect available services
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                return "Error: No available services found in ./repos/\nRun 'spi fork --service all' to clone repositories"
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(services_arg, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
@@ -131,13 +145,8 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         return None
 
     if cmd == "test":
-        if len(parts) < 2:
-            return "Usage: /test <service> [--provider <provider>]\nExample: /test partition --provider azure"
-
-        services_arg = parts[1]
-        provider = "core,azure"  # Default to core + azure coverage
-
         # Parse --provider flag
+        provider = "core,azure"  # Default to core + azure coverage
         if "--provider" in parts:
             provider_idx = parts.index("--provider")
             if provider_idx + 1 < len(parts):
@@ -146,7 +155,26 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if not COPILOT_AVAILABLE or copilot_module is None:
             return "Error: Copilot module not available for service validation"
 
-        services = copilot_module.parse_services(services_arg)
+        # Auto-detect services if not specified
+        services_arg = None
+        available_services = None
+
+        # Check if service is specified (not a flag)
+        if len(parts) >= 2 and not parts[1].startswith("--"):
+            services_arg = parts[1]
+        else:
+            # Auto-detect available services
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                return "Error: No available services found in ./repos/\nRun 'spi fork --service all' to clone repositories"
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(services_arg, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
@@ -158,10 +186,6 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         return None
 
     if cmd == "vulns":
-        if len(parts) < 2:
-            return "Usage: /vulns <service> [--create-issue] [--severity LEVEL] [--providers PROVIDERS] [--include-testing]\nExample: /vulns partition\nExample: /vulns partition --providers azure,aws --include-testing"
-
-        services_arg = parts[1]
         create_issue = "--create-issue" in parts
 
         # Parse --severity flag (empty list = server scans all severities)
@@ -188,7 +212,26 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         except FileNotFoundError as exc:  # pragma: no cover - packaging guard
             return f"Error: {exc}"
 
-        services = copilot_module.parse_services(services_arg)
+        # Auto-detect services if not specified
+        services_arg = None
+        available_services = None
+
+        # Check if service is specified (not a flag)
+        if len(parts) >= 2 and not parts[1].startswith("--"):
+            services_arg = parts[1]
+        else:
+            # Auto-detect available services
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                return "Error: No available services found in ./repos/\nRun 'spi fork --service all' to clone repositories"
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(services_arg, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
@@ -289,13 +332,8 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         return None
 
     if cmd == "depends":
-        if len(parts) < 2:
-            return "Usage: /depends <service> [--providers <providers>] [--include-testing] [--create-issue]\nExamples:\n  /depends partition\n  /depends partition --providers azure,core\n  /depends partition,legal --create-issue"
-
-        services_arg = parts[1]
-
-        # Parse --providers flag (default: azure; core is always included)
-        providers = ["azure"]
+        # Parse --providers flag (default: core,azure)
+        providers = ["core", "azure"]
         if "--providers" in parts:
             providers_idx = parts.index("--providers")
             if providers_idx + 1 < len(parts):
@@ -311,7 +349,26 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if not COPILOT_AVAILABLE or copilot_module is None:
             return "Error: Copilot module not available for service validation"
 
-        services = copilot_module.parse_services(services_arg)
+        # Auto-detect services if not specified
+        services_arg = None
+        available_services = None
+
+        # Check if service is specified (not a flag)
+        if len(parts) >= 2 and not parts[1].startswith("--"):
+            services_arg = parts[1]
+        else:
+            # Auto-detect available services
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                return "Error: No available services found in ./repos/\nRun 'spi fork --service all' to clone repositories"
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(services_arg, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             return f"Error: Invalid service(s): {', '.join(invalid)}"
@@ -410,6 +467,91 @@ async def _count_existing_repos(config: AgentConfig) -> int:
     return sum(1 for r in results if r is True)
 
 
+async def detect_available_services(config: AgentConfig) -> List[str]:
+    """Detect services that exist both locally and on GitHub.
+
+    This function performs a dual check:
+    1. Local existence: Service directory exists at ./repos/<service>/
+    2. Remote existence: Repository exists in the configured GitHub organization
+
+    Only services passing both checks are returned. This ensures commands
+    operate only on services that are actually available and accessible.
+
+    Args:
+        config: Agent configuration with organization and repositories
+
+    Returns:
+        List of available service names (sorted alphabetically)
+    """
+    from spi_agent.github.direct_client import GitHubDirectClient
+
+    repos_dir = Path("./repos")
+
+    # Check if repos directory exists
+    if not repos_dir.exists() or not repos_dir.is_dir():
+        return []
+
+    # Get list of local service directories
+    try:
+        local_services = [
+            item.name
+            for item in repos_dir.iterdir()
+            if item.is_dir() and item.name in config.repositories
+        ]
+    except (OSError, PermissionError):
+        # Handle permission errors or other file system issues gracefully
+        return []
+
+    if not local_services:
+        return []
+
+    # Verify each local service exists on GitHub
+    client = GitHubDirectClient(config)
+
+    async def check_service(service: str) -> tuple[str, bool]:
+        """Check if a service exists on GitHub."""
+        repo_name = config.get_repo_full_name(service)
+        try:
+            repo_info = await client._get_repo_info(repo_name)
+            return (service, repo_info.get("exists", False))
+        except:
+            return (service, False)
+
+    # Check all local services concurrently
+    results = await asyncio.gather(
+        *[check_service(service) for service in local_services],
+        return_exceptions=True
+    )
+
+    # Filter to only services that exist on GitHub (not exceptions)
+    available_services = [
+        service
+        for service, exists in results
+        if not isinstance((service, exists), BaseException) and exists
+    ]
+
+    return sorted(available_services)
+
+
+def format_auto_detection_message(services: List[str]) -> str:
+    """Format a user-friendly message about auto-detected services.
+
+    Args:
+        services: List of detected service names
+
+    Returns:
+        Formatted message string
+    """
+    if not services:
+        return "No available services found in ./repos/"
+
+    count = len(services)
+    service_word = "service" if count == 1 else "services"
+    service_list = ", ".join(services)
+
+    return f"Auto-detected {count} {service_word}: {service_list}"
+
+
 async def run_chat_mode(quiet: bool = False) -> int:
     """Run interactive chat mode."""
     config = AgentConfig()
@@ -426,7 +568,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
             existing_count = await _count_existing_repos(config)
             total_count = len(config.repositories)
 
-            console.print(f"[cyan][◉‿◉] SPI Agent[/cyan]")
+            console.print(f"[cyan][◉‿◉] Agent (Betty)[/cyan]")
             console.print(f"[blue]{agent.config.organization}[/blue] | [green]{existing_count}/{total_count} repos[/green]")
             console.print()
             console.print("[dim]Type 'help' for available commands and 'exit' to quit[/dim]\n")
@@ -510,7 +652,7 @@ async def run_chat_mode(quiet: bool = False) -> int:
 
                     # Reprint banner
                     if not quiet:
-                        console.print(f"[cyan][◉‿◉] SPI Agent[/cyan]")
+                        console.print(f"[cyan][◉‿◉] Agent (Betty)[/cyan]")
                         console.print()
 
                     # Replace thread
@@ -675,8 +817,8 @@ Examples:
         fork_parser.add_argument(
             "--service",
             "-s",
-            default="all",
-            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
+            required=True,
+            help="Service name(s): 'all', single name, or comma-separated list (required)",
         )
         fork_parser.add_argument(
             "--branch",
@@ -693,8 +835,8 @@ Examples:
         status_parser.add_argument(
             "--service",
             "-s",
-            default="all",
-            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
+            default=None,
+            help="Service name(s): 'all', single name, or comma-separated list (default: auto-detect available services)",
         )
         status_parser.add_argument(
             "--platform",
@@ -715,14 +857,14 @@ Examples:
         test_parser.add_argument(
             "--service",
             "-s",
-            default="all",
-            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
+            default=None,
+            help="Service name(s): 'all', single name, or comma-separated list (default: auto-detect available services)",
         )
         test_parser.add_argument(
             "--provider",
             "-p",
-            default="core,core-plus,azure",
-            help="Cloud provider(s): azure, aws, gc, ibm, core, all (default: core,core-plus,azure)",
+            default="core,azure",
+            help="Cloud provider(s): azure, aws, gc, ibm, core, all (default: core,azure)",
         )
 
         vulns_parser = subparsers.add_parser(
@@ -733,8 +875,8 @@ Examples:
         vulns_parser.add_argument(
             "--service",
             "-s",
-            default="all",
-            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
+            default=None,
+            help="Service name(s): 'all', single name, or comma-separated list (default: auto-detect available services)",
         )
         vulns_parser.add_argument(
             "--create-issue",
@@ -787,13 +929,13 @@ Examples:
         depends_parser.add_argument(
             "--service",
             "-s",
-            default="all",
-            help="Service name(s): 'all', single name, or comma-separated list (default: all)",
+            default=None,
+            help="Service name(s): 'all', single name, or comma-separated list (default: auto-detect available services)",
         )
         depends_parser.add_argument(
             "--providers",
-            default="core-plus,azure",
-            help="Provider(s) to include: core-plus, azure, aws, gcp, or comma-separated list (default: core-plus,azure)",
+            default="core,azure",
+            help="Provider(s) to include: core, azure, aws, gcp, or comma-separated list (default: core,azure)",
         )
         depends_parser.add_argument(
             "--include-testing",
@@ -851,7 +993,22 @@ async def async_main(args: Optional[list[str]] = None) -> int:
         # Determine platform
         platform = parsed.platform
 
-        services = copilot_module.parse_services(parsed.service)
+        # Auto-detect available services if --service not specified
+        available_services = None
+        if parsed.service is None:
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                console.print("[red]Error:[/red] No available services found in ./repos/", style="bold red")
+                console.print("[dim]Run 'spi fork --service all' to clone repositories[/dim]")
+                return 1
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(parsed.service, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
@@ -874,7 +1031,22 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        services = copilot_module.parse_services(parsed.service)
+        # Auto-detect available services if --service not specified
+        available_services = None
+        if parsed.service is None:
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                console.print("[red]Error:[/red] No available services found in ./repos/", style="bold red")
+                console.print("[dim]Run 'spi fork --service all' to clone repositories[/dim]")
+                return 1
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(parsed.service, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
@@ -902,7 +1074,22 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        services = copilot_module.parse_services(parsed.service)
+        # Auto-detect available services if --service not specified
+        available_services = None
+        if parsed.service is None:
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                console.print("[red]Error:[/red] No available services found in ./repos/", style="bold red")
+                console.print("[dim]Run 'spi fork --service all' to clone repositories[/dim]")
+                return 1
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(parsed.service, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
@@ -1077,7 +1264,22 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print("[dim]Clone the repository to access Copilot workflows[/dim]")
             return 1
 
-        services = copilot_module.parse_services(parsed.service)
+        # Auto-detect available services if --service not specified
+        available_services = None
+        if parsed.service is None:
+            config = AgentConfig()
+            available_services = await detect_available_services(config)
+
+            if not available_services:
+                console.print("[red]Error:[/red] No available services found in ./repos/", style="bold red")
+                console.print("[dim]Run 'spi fork --service all' to clone repositories[/dim]")
+                return 1
+
+            # Display auto-detection message
+            console.print(f"[cyan]{format_auto_detection_message(available_services)}[/cyan]")
+            console.print()
+
+        services = copilot_module.parse_services(parsed.service, available_services=available_services)
         invalid = [s for s in services if s not in copilot_module.SERVICES]
         if invalid:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")

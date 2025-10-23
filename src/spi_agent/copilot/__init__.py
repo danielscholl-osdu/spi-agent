@@ -101,10 +101,42 @@ def get_prompt_file(name: str) -> Traversable:
     return prompt
 
 
-def parse_services(services_arg: str) -> List[str]:
-    """Parse services argument into list"""
+def parse_services(services_arg: Optional[str] = None, available_services: Optional[List[str]] = None) -> List[str]:
+    """Parse services argument into list.
+
+    Args:
+        services_arg: Service specification string ("all", "partition", "partition,legal", etc.)
+                     If None, uses available_services parameter for auto-detection.
+        available_services: List of auto-detected available services (used when services_arg is None)
+
+    Returns:
+        List of service names to process
+
+    Raises:
+        ValueError: If services_arg is None and available_services is None
+
+    Examples:
+        >>> parse_services("all")
+        ['partition', 'legal', 'schema', ...]
+        >>> parse_services("partition,legal")
+        ['partition', 'legal']
+        >>> parse_services(None, available_services=["partition"])
+        ['partition']
+    """
+    # If services_arg is None, use available_services (auto-detection mode)
+    if services_arg is None:
+        if available_services is None:
+            raise ValueError(
+                "Either services_arg or available_services must be provided. "
+                "Use --service flag to specify services explicitly."
+            )
+        return available_services
+
+    # Handle "all" keyword
     if services_arg.lower() == "all":
         return list(SERVICES.keys())
+
+    # Parse comma-separated service list
     return [s.strip() for s in services_arg.split(",")]
 
 

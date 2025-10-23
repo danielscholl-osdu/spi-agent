@@ -998,21 +998,9 @@ class DirectTestRunner:
             border_color_map = {5: "green", 4: "blue", 3: "yellow", 2: "orange1", 1: "red"}
             border_color = border_color_map.get(worst_grade_value, "cyan")
 
-        profile_info = f"{len(self.services)} service{'s' if len(self.services) > 1 else ''} x {len(self.profiles)} profiles"
-
-        if total_tests > 0:
-            if total_failed > 0:
-                test_summary = f"{total_failed} failed / {total_passed} passed / {total_tests} total"
-            else:
-                test_summary = f"All {total_tests} tests passed"
-            subtitle = f"{profile_info} | {test_summary}"
-        else:
-            subtitle = profile_info
-
         return Panel(
             table,
             title="Test Results",
-            subtitle=subtitle,
             border_style=border_color,
             padding=(1, 2)
         )
