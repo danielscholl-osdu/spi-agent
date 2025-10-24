@@ -187,9 +187,9 @@ Available services:
     fork_parser.add_argument(
         "--branch",
         "-b",
-        default="main",
+        default=config.default_branch,
         metavar="BRANCH",
-        help="Branch name (default: main)",
+        help=f"Branch name (default: {config.default_branch})",
     )
 
     # Status command

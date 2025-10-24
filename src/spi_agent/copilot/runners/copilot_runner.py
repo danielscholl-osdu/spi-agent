@@ -23,11 +23,11 @@ class CopilotRunner(BaseRunner):
     def __init__(
         self,
         services: List[str],
-        branch: str = "main",
+        branch: str | None = None,
     ):
         # Pass dummy path since we don't use prompts in direct API mode
         super().__init__(Path("/dev/null"), services)
-        self.branch = branch
+        self.branch = branch if branch is not None else config.default_branch
         self.tracker = ServiceTracker(services)
 
     @property

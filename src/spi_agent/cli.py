@@ -809,6 +809,9 @@ Examples:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     if COPILOT_AVAILABLE:
+        # Import copilot config to get default branch
+        from spi_agent.copilot.config import config as copilot_config
+
         fork_parser = subparsers.add_parser(
             "fork",
             help="Fork and initialize OSDU SPI service repositories",
@@ -823,8 +826,8 @@ Examples:
         fork_parser.add_argument(
             "--branch",
             "-b",
-            default="main",
-            help="Branch name (default: main)",
+            default=copilot_config.default_branch,
+            help=f"Branch name (default: {copilot_config.default_branch})",
         )
 
         status_parser = subparsers.add_parser(

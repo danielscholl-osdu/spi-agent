@@ -12,6 +12,7 @@ GitLab upstream repositories (the OSDU workflow).
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -404,7 +405,8 @@ def create_mr_branch_from_upstream(
     """
     Create MR branch from upstream remote.
 
-    Creates a new branch named 'gitlab-mr-{pr_number}' from upstream/{base_branch}.
+    Creates a new branch named 'spi/pr-{pr_number}-{timestamp}' from upstream/{base_branch}.
+    The timestamp ensures re-runs don't conflict with existing branches.
     Automatically maps GitHub branch names to GitLab equivalents (e.g., main → master).
 
     Args:
@@ -420,7 +422,9 @@ def create_mr_branch_from_upstream(
         git_tools = GitRepositoryTools(config)
         repo_path = git_tools._get_repo_path(service)
 
-        mr_branch = f"gitlab-mr-{pr_number}"
+        # Generate timestamped branch name for idempotent re-runs
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M')
+        mr_branch = f"spi/pr-{pr_number}-{timestamp}"
 
         # Smart branch mapping: Check if base_branch exists on upstream
         # If not, try common alternatives (main ↔ master)
@@ -560,9 +564,13 @@ def push_branch_to_gitlab(service: str, branch: str, config: AgentConfig) -> Tup
     """
     Push branch to GitLab upstream.
 
+    Pushes timestamped branch (spi/pr-{number}-{timestamp}) to GitLab.
+    Since branch names include timestamps, each push is unique and
+    doesn't conflict with previous runs.
+
     Args:
         service: Service name
-        branch: Branch name to push
+        branch: Branch name to push (e.g., 'spi/pr-5-20250123-1430')
         config: Agent configuration
 
     Returns:
