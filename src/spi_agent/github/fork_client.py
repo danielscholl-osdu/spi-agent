@@ -285,10 +285,10 @@ class ForkDirectClient:
                         "error": f"Failed to clone template: {result.stderr}",
                     }
 
-                # Switch to target branch
+                # Checkout the specified branch from template
                 result = await asyncio.to_thread(
                     subprocess.run,
-                    ["git", "checkout", "-b", branch],
+                    ["git", "checkout", branch],
                     capture_output=True,
                     text=True,
                     timeout=30,
@@ -298,8 +298,38 @@ class ForkDirectClient:
                 if result.returncode != 0:
                     return {
                         "success": False,
-                        "error": f"Failed to switch branch: {result.stderr}",
+                        "error": f"Failed to checkout branch '{branch}': {result.stderr}",
                     }
+
+                # Rename branch to 'main' for the new repo
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["git", "branch", "-M", "main"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=temp_dir,
+                )
+
+                if result.returncode != 0:
+                    return {
+                        "success": False,
+                        "error": f"Failed to rename branch to main: {result.stderr}",
+                    }
+
+                # Remove template's origin remote before creating new repo
+                # (git clone created origin -> azure/osdu-spi, but gh repo create needs to add origin -> org/service)
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["git", "remote", "remove", "origin"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=temp_dir,
+                )
+
+                if result.returncode != 0:
+                    logger.warning(f"Could not remove origin remote: {result.stderr}")
 
                 # Create GitHub repo from local directory
                 result = await asyncio.to_thread(

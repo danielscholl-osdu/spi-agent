@@ -62,7 +62,10 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             return "Usage: /fork <service> [--branch <branch>]\nExample: /fork partition,legal"
 
         services_arg = parts[1]
-        branch = "main"
+
+        # Import copilot config to get default branch (consistent with CLI mode)
+        from spi_agent.copilot.config import config as copilot_config
+        branch = copilot_config.default_branch
 
         # Check for --branch flag
         if "--branch" in parts:
