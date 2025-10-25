@@ -687,14 +687,14 @@ async def run_chat_mode(quiet: bool = False) -> int:
 
                 # Use execution tree display if visualization enabled, otherwise simple status
                 if execution_context.show_visualization:
-                    from spi_agent.display.execution_tree import ExecutionTreeDisplay
+                    from spi_agent.display.execution_tree import ExecutionTreeDisplay, DisplayMode
                     from spi_agent.display.interrupt_handler import InterruptHandler
 
                     # Create interrupt handler for graceful cancellation
                     interrupt_handler = InterruptHandler()
 
-                    # Create execution tree display
-                    tree_display = ExecutionTreeDisplay(console=console)
+                    # Create execution tree display (default to MINIMAL mode in interactive chat)
+                    tree_display = ExecutionTreeDisplay(console=console, display_mode=DisplayMode.MINIMAL)
 
                     try:
                         # Start tree display (event processing runs in background)
@@ -831,10 +831,11 @@ async def run_single_query(prompt: str, quiet: bool = False, verbose: bool = Fal
         try:
             if verbose:
                 # Use execution tree display for verbose mode
-                from spi_agent.display.execution_tree import ExecutionTreeDisplay
+                from spi_agent.display.execution_tree import ExecutionTreeDisplay, DisplayMode
                 from spi_agent.display.events import get_event_emitter
 
-                tree_display = ExecutionTreeDisplay(console=console)
+                # Use VERBOSE mode to show all details when --verbose flag is used
+                tree_display = ExecutionTreeDisplay(console=console, display_mode=DisplayMode.VERBOSE)
 
                 # Create a new thread for the single query
                 thread = agent.agent.get_new_thread()

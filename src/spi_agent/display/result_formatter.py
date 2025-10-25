@@ -82,6 +82,35 @@ def format_tool_result(tool_name: str, result: Any) -> str:
             return f"Found {len(result)} match(es)"
         return "Searched files"
 
+    # Search and dependency tools
+    if tool_name == "search_in_files":
+        if isinstance(result, str):
+            # Count matches (result contains match lines)
+            match_count = result.count("\n") if result else 0
+            return f"Found {match_count} match(es)"
+        elif isinstance(result, list):
+            return f"Found {len(result)} match(es)"
+        return "Searched files"
+
+    if tool_name == "find_dependency_versions":
+        # Parse result to extract key info
+        if isinstance(result, str):
+            if "No references found" in result:
+                return "No references found"
+            elif "Found" in result:
+                # Extract count if present
+                return result.split('\n')[0] if '\n' in result else result[:60]
+        return "Searched dependencies"
+
+    if tool_name == "list_files":
+        if isinstance(result, list):
+            return f"Found {len(result)} file(s)"
+        elif isinstance(result, str):
+            # Count lines if result is string with file list
+            file_count = result.count("\n") if result else 0
+            return f"Found {file_count} file(s)"
+        return "Listed files"
+
     # Maven MCP tools
     if "check_version" in tool_name:
         if isinstance(result, dict):

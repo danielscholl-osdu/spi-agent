@@ -236,12 +236,119 @@ class ExecutionTreeDisplay:
 
         return node
 
+    def _render_phases(self) -> RenderableType:
+        """Render execution using phase-based view.
+
+        Returns:
+            Rich renderable with phase-grouped display
+        """
+        if not self._phases:
+            return Text(f"{SYMBOL_ACTIVE} Thinking...", style=COLOR_ACTIVE)
+
+        renderables = []
+
+        # Calculate session progress
+        completed_count = sum(1 for p in self._phases if p.status == "completed")
+        total_phases = len(self._phases)
+        session_duration = (datetime.now() - self._session_start_time).total_seconds()
+
+        # Display mode: MINIMAL (only show active phase)
+        if self.display_mode == DisplayMode.MINIMAL:
+            # Only show current phase if one exists
+            if self._current_phase and self._current_phase.status == "in_progress":
+                phase_label = Text(f"{SYMBOL_ACTIVE} {self._current_phase.summary}", style=COLOR_ACTIVE)
+                phase_tree = Tree(phase_label)
+
+                # Show LLM details if verbose
+                if self._show_llm_details and self._current_phase.llm_node:
+                    phase_tree.add(self._render_node_rich(self._current_phase.llm_node))
+
+                # Show tool calls
+                for tool_node in self._current_phase.tool_nodes:
+                    phase_tree.add(self._render_node_rich(tool_node))
+
+                renderables.append(phase_tree)
+
+                # Progress line
+                if completed_count > 0:
+                    progress_text = Text(
+                        f"\n{completed_count}/{total_phases} phases complete",
+                        style="dim"
+                    )
+                    renderables.append(progress_text)
+
+            elif completed_count == total_phases and total_phases > 0:
+                # All done - show minimal summary
+                summary_text = Text(
+                    f"{SYMBOL_SUCCESS} Complete ({session_duration:.1f}s)",
+                    style=COLOR_SUCCESS
+                )
+                renderables.append(summary_text)
+
+        # Display mode: DEFAULT (show active + completed summary)
+        elif self.display_mode == DisplayMode.DEFAULT:
+            # Show completed phases (condensed)
+            for phase in self._phases[:-1]:  # All but current
+                if phase.status == "completed":
+                    phase_text = Text(
+                        f"{SYMBOL_COMPLETE} {phase.summary} ({phase.duration:.1f}s)",
+                        style=COLOR_COMPLETE
+                    )
+                    renderables.append(phase_text)
+
+            # Show current phase (expanded)
+            if self._current_phase and self._current_phase.status == "in_progress":
+                phase_label = Text(f"{SYMBOL_ACTIVE} {self._current_phase.summary}", style=COLOR_ACTIVE)
+                phase_tree = Tree(phase_label)
+
+                for tool_node in self._current_phase.tool_nodes:
+                    phase_tree.add(self._render_node_rich(tool_node))
+
+                renderables.append(phase_tree)
+
+        # Display mode: VERBOSE (show all details)
+        else:  # VERBOSE
+            for phase in self._phases:
+                # Phase header
+                if phase.status == "in_progress":
+                    symbol = SYMBOL_ACTIVE
+                    style = COLOR_ACTIVE
+                elif phase.status == "completed":
+                    symbol = SYMBOL_COMPLETE
+                    style = COLOR_COMPLETE
+                else:
+                    symbol = SYMBOL_ERROR
+                    style = COLOR_ERROR
+
+                phase_label = Text(
+                    f"{symbol} {phase.summary} ({phase.duration:.1f}s)",
+                    style=style
+                )
+                phase_tree = Tree(phase_label)
+
+                # LLM details
+                if self._show_llm_details and phase.llm_node:
+                    phase_tree.add(self._render_node_rich(phase.llm_node))
+
+                # Tool calls
+                for tool_node in phase.tool_nodes:
+                    phase_tree.add(self._render_node_rich(tool_node))
+
+                renderables.append(phase_tree)
+
+        return Group(*renderables) if renderables else Text(f"{SYMBOL_ACTIVE} Thinking...", style=COLOR_ACTIVE)
+
     def _render_tree(self) -> RenderableType:
         """Render the execution tree.
 
         Returns:
             Rich renderable tree
         """
+        # Use phase-based rendering if phases exist
+        if self._phases:
+            return self._render_phases()
+
+        # Fallback to node-based rendering (for non-phase events)
         if not self._is_rich_supported:
             # Fallback to simple text rendering
             lines = []
@@ -251,14 +358,14 @@ class ExecutionTreeDisplay:
 
         # Create Rich tree for hierarchical display
         if not self._root_nodes:
-            return Text("🤖 Thinking...", style="dim")
+            return Text(f"{SYMBOL_ACTIVE} Thinking...", style=COLOR_ACTIVE)
 
         # Render all root nodes
         renderables = []
         for root_node in self._root_nodes:
             renderables.append(self._render_node_rich(root_node))
 
-        return Group(*renderables) if renderables else Text("🤖 Thinking...", style="dim")
+        return Group(*renderables) if renderables else Text(f"{SYMBOL_ACTIVE} Thinking...", style=COLOR_ACTIVE)
 
     def _render_node_simple(self, node: TreeNode, indent: int) -> List[str]:
         """Render node in simple text format (non-Rich terminals).
@@ -482,6 +589,10 @@ class ExecutionTreeDisplay:
                 break
             await self._handle_event(event)
 
+        # Complete any active phase
+        if self._current_phase and self._current_phase.status == "in_progress":
+            self._current_phase.complete()
+
         self._running = False
 
         # Cancel background task
@@ -494,19 +605,19 @@ class ExecutionTreeDisplay:
 
         # Stop Rich Live display
         if self._live:
-            # Final render before stopping
+            # Final render before stopping (Live will show this)
             self._live.update(self._render_tree())
             self._live.stop()
 
-            # Print final tree state so it persists after Live stops
-            # Debug: always print tree info
-            self.console.print(f"\n[dim]Debug: {len(self._root_nodes)} root nodes, {len(self._node_map)} total nodes[/dim]")
-            if self._root_nodes:
-                self.console.print()
-                self.console.print(self._render_tree())
-                self.console.print()
-            else:
-                self.console.print("[yellow]No execution tree nodes were created[/yellow]")
+            # In MINIMAL mode, print a clean completion message after Live stops
+            # (Live display is transient and disappears, so we print a final state)
+            if self.display_mode == DisplayMode.MINIMAL and self._phases:
+                completed_count = len([p for p in self._phases if p.status == "completed"])
+                total_duration = (datetime.now() - self._session_start_time).total_seconds()
+                self.console.print(
+                    f"\n[{COLOR_SUCCESS}]{SYMBOL_SUCCESS} Complete ({total_duration:.1f}s) - "
+                    f"{completed_count} phases[/{COLOR_SUCCESS}]\n"
+                )
 
     async def update(self) -> None:
         """Manually trigger a display update.

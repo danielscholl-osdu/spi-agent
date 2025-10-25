@@ -18,7 +18,7 @@ from spi_agent.display.execution_context import (
     is_interactive_mode,
     set_execution_context,
 )
-from spi_agent.display.execution_tree import ExecutionTreeDisplay
+from spi_agent.display.execution_tree import DisplayMode, ExecutionTreeDisplay
 from spi_agent.display.interrupt_handler import InterruptHandler
 from spi_agent.display.result_formatter import format_tool_result
 
@@ -37,6 +37,7 @@ __all__ = [
     "set_execution_context",
     "get_execution_context",
     "is_interactive_mode",
+    "DisplayMode",
     "ExecutionTreeDisplay",
     "InterruptHandler",
     "format_tool_result",
