@@ -164,7 +164,7 @@ class ExecutionPhase:
         """Get phase summary description."""
         tool_count = len(self.tool_nodes)
         if tool_count == 0:
-            return f"Phase {self.phase_number}: Initial thinking"
+            return f"Phase {self.phase_number}: Thinking"
         elif tool_count == 1:
             tool_name = self.tool_nodes[0].label.replace(SYMBOL_TOOL + " ", "").split(" ")[0]
             return f"Phase {self.phase_number}: {tool_name}"
@@ -269,13 +269,7 @@ class ExecutionTreeDisplay:
 
                 renderables.append(phase_tree)
 
-                # Progress line
-                if completed_count > 0:
-                    progress_text = Text(
-                        f"\n{completed_count}/{total_phases} phases complete",
-                        style="dim"
-                    )
-                    renderables.append(progress_text)
+                # No progress line in MINIMAL mode - just show what's happening
 
             elif completed_count == total_phases and total_phases > 0:
                 # All done - show minimal summary
@@ -605,19 +599,13 @@ class ExecutionTreeDisplay:
 
         # Stop Rich Live display
         if self._live:
-            # Final render before stopping (Live will show this)
+            # Final render before stopping (this will persist since transient=False)
             self._live.update(self._render_tree())
             self._live.stop()
 
-            # In MINIMAL mode, print a clean completion message after Live stops
-            # (Live display is transient and disappears, so we print a final state)
-            if self.display_mode == DisplayMode.MINIMAL and self._phases:
-                completed_count = len([p for p in self._phases if p.status == "completed"])
-                total_duration = (datetime.now() - self._session_start_time).total_seconds()
-                self.console.print(
-                    f"\n[{COLOR_SUCCESS}]{SYMBOL_SUCCESS} Complete ({total_duration:.1f}s) - "
-                    f"{completed_count} phases[/{COLOR_SUCCESS}]\n"
-                )
+            # Live display persists, so no need to print again
+            # Just add a blank line for spacing
+            self.console.print()
 
     async def update(self) -> None:
         """Manually trigger a display update.
