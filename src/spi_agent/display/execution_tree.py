@@ -286,9 +286,13 @@ class ExecutionTreeDisplay:
                 # No progress line in MINIMAL mode - just show what's happening
 
             elif completed_count == total_phases and total_phases > 0:
-                # All done - show minimal summary with Betty's face
+                # All done - show minimal summary with Betty's face and final counts
+                total_tools = sum(len(p.tool_nodes) for p in self._phases)
+                final_phase = self._phases[-1] if self._phases else None
+                final_messages = final_phase.llm_node.metadata.get("message_count", 0) if (final_phase and final_phase.llm_node) else 0
+
                 summary_text = Text(
-                    f"⎿ [◉‿◉] Complete ({session_duration:.1f}s)",
+                    f"⎿ [◉‿◉] Complete ({session_duration:.1f}s) - Tools:{total_tools} Messages:{final_messages}",
                     style=COLOR_SUCCESS
                 )
                 renderables.append(summary_text)
