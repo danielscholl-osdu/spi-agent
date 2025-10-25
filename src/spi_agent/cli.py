@@ -559,8 +559,13 @@ def format_auto_detection_message(services: List[str]) -> str:
     return f"Auto-detected {count} {service_word}: {service_list}"
 
 
-async def run_chat_mode(quiet: bool = False) -> int:
-    """Run interactive chat mode."""
+async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
+    """Run interactive chat mode.
+
+    Args:
+        quiet: Suppress status display
+        verbose: Show verbose execution tree with all phases
+    """
     config = AgentConfig()
 
     # Set execution context for interactive mode
@@ -693,8 +698,11 @@ async def run_chat_mode(quiet: bool = False) -> int:
                     # Create interrupt handler for graceful cancellation
                     interrupt_handler = InterruptHandler()
 
-                    # Create execution tree display (default to MINIMAL mode in interactive chat)
-                    tree_display = ExecutionTreeDisplay(console=console, display_mode=DisplayMode.MINIMAL)
+                    # Choose display mode based on verbose flag
+                    display_mode = DisplayMode.VERBOSE if verbose else DisplayMode.MINIMAL
+
+                    # Create execution tree display
+                    tree_display = ExecutionTreeDisplay(console=console, display_mode=display_mode)
 
                     try:
                         # Start tree display (event processing runs in background)
@@ -1436,7 +1444,7 @@ async def async_main(args: Optional[list[str]] = None) -> int:
     if parsed.prompt:
         return await run_single_query(parsed.prompt, parsed.quiet, parsed.verbose)
 
-    return await run_chat_mode(parsed.quiet)
+    return await run_chat_mode(parsed.quiet, parsed.verbose)
 
 
 def main() -> int:
