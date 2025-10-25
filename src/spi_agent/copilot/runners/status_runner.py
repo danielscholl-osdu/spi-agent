@@ -17,10 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 class StatusRunner(BaseRunner):
-    """Direct API client for gathering GitHub/GitLab status"""
+    """Direct API client for gathering GitHub/GitLab status
 
-    def __init__(self, prompt_file: Optional[Union[Path, Traversable]], services: List[str], providers: Optional[List[str]] = None):
+    Args:
+        prompt_file: Optional prompt file path (not used in direct API mode)
+        services: List of service names to check
+        providers: Optional provider filters for GitLab (e.g., ["Azure", "Core"])
+        show_actions: Whether to show detailed workflow/pipeline action table (default: False)
+    """
+
+    def __init__(self, prompt_file: Optional[Union[Path, Traversable]], services: List[str], providers: Optional[List[str]] = None, show_actions: bool = False):
         self.providers = providers  # Optional providers for GitLab filtering (must be set before super().__init__)
+        self.show_actions = show_actions  # Control display of detailed workflow/pipeline table
         # Pass dummy path since we don't use prompts in direct API mode
         super().__init__(prompt_file or Path("/dev/null"), services)
 
@@ -390,7 +398,7 @@ class StatusRunner(BaseRunner):
                 for service_data in services_data.values()
             )
 
-        if has_workflows:
+        if has_workflows and self.show_actions:
             table_title = "MR Pipeline Runs" if is_gitlab else "[italic]Action Status[/italic]"
             workflow_table = Table(title=table_title, expand=True)
             workflow_table.add_column("Service", style="cyan", no_wrap=True)
@@ -511,7 +519,7 @@ class StatusRunner(BaseRunner):
             console.print(workflow_table)
 
         # Failed Pipeline Jobs Section (GitLab only)
-        if is_gitlab:
+        if is_gitlab and self.show_actions:
             # Collect all failed pipelines with jobs
             failed_pipeline_jobs = []
             for service_name in services_data.keys():
@@ -696,6 +704,134 @@ class StatusRunner(BaseRunner):
 
                     console.print(job_table)
                     console.print()
+
+        # Display condensed summary when workflows exist but show_actions is False
+        elif has_workflows and not self.show_actions:
+            # Collect workflows by service and status
+            workflows_by_service = {}
+            running_workflows = {}  # Track running workflows per service
+            failed_workflows = {}   # Track failed workflows per service
+
+            for service_name, service_data in services_data.items():
+                if is_gitlab:
+                    mr_pipeline_tuples = mr_pipelines.get(service_name, [])
+                    workflows = [p for _, p in mr_pipeline_tuples]
+                else:
+                    workflows = service_data.get("workflows", {}).get("recent", [])
+
+                workflows_by_service[service_name] = workflows
+
+                # Track running and failed workflows for detailed view
+                if is_gitlab:
+                    running = [w for w in workflows if w.get("status") in ["running", "pending", "created"]]
+                    failed = [w for w in workflows if w.get("status") == "failed"]
+                else:
+                    running = [w for w in workflows if w.get("status") in ["in_progress", "queued", "waiting"]]
+                    failed = [w for w in workflows if w.get("status") == "completed" and w.get("conclusion") in ["failure", "cancelled"]]
+
+                if running:
+                    running_workflows[service_name] = running
+                if failed:
+                    failed_workflows[service_name] = failed
+
+            # Collect all workflows for total counts
+            all_workflows = [w for workflows in workflows_by_service.values() for w in workflows]
+
+            if all_workflows:
+                total_count = len(all_workflows)
+
+                # Count by status
+                if is_gitlab:
+                    success_count = sum(1 for w in all_workflows if w.get("status") == "success")
+                    failed_count = sum(1 for w in all_workflows if w.get("status") == "failed")
+                    running_count = sum(1 for w in all_workflows if w.get("status") in ["running", "pending", "created"])
+                    canceled_count = sum(1 for w in all_workflows if w.get("status") in ["canceled", "skipped"])
+                else:
+                    success_count = sum(1 for w in all_workflows if w.get("status") == "completed" and w.get("conclusion") == "success")
+                    failed_count = sum(1 for w in all_workflows if w.get("status") == "completed" and w.get("conclusion") in ["failure", "cancelled"])
+                    running_count = sum(1 for w in all_workflows if w.get("status") in ["in_progress", "queued", "waiting"])
+                    needs_approval_count = sum(1 for w in all_workflows if w.get("conclusion") == "action_required")
+
+                # Build status-focused summary (not statistics)
+                # Philosophy: Show current state and problems, not success counts
+                summary_parts = []
+
+                if is_gitlab:
+                    # Failures and running are actionable
+                    if failed_count > 0:
+                        summary_parts.append(f"[red]{failed_count} failed[/red]")
+                    if running_count > 0:
+                        summary_parts.append(f"[yellow]{running_count} running[/yellow]")
+
+                    # If nothing actionable, show healthy status
+                    if not summary_parts:
+                        summary = "[green]✓ All pipelines healthy[/green]"
+                    else:
+                        summary = f"⚠ {', '.join(summary_parts)}"
+                else:
+                    # Approval needed is critical
+                    if needs_approval_count > 0:
+                        summary_parts.append(f"[red bold]{needs_approval_count} need approval[/red bold]")
+                    # Failures are important
+                    if failed_count > 0:
+                        summary_parts.append(f"[red]{failed_count} failed[/red]")
+                    # Running is informational
+                    if running_count > 0:
+                        summary_parts.append(f"[yellow]{running_count} running[/yellow]")
+
+                    # If nothing actionable, show healthy status
+                    if not summary_parts:
+                        summary = "[green]✓ All workflows healthy[/green]"
+                    elif running_count > 0 and not (needs_approval_count or failed_count):
+                        # Only running, everything else healthy
+                        summary = f"[green]✓ All healthy[/green] ([yellow]{running_count} running[/yellow])"
+                    else:
+                        summary = f"⚠ {', '.join(summary_parts)}"
+
+                # Build detailed view for running/failed workflows (tree-style)
+                content_lines = [summary]
+
+                # Show running workflows by service (minimal, actionable)
+                if running_workflows:
+                    content_lines.append("")
+                    for service_name, running in sorted(running_workflows.items()):
+                        # Show only workflow names, keep it minimal
+                        workflow_names = [w.get("name", f"Pipeline #{w.get('id')}") for w in running[:3]]  # Max 3 per service
+
+                        if len(running) == 1:
+                            content_lines.append(f"  [yellow]▶[/yellow] {service_name}: {workflow_names[0]}")
+                        elif len(running) <= 3:
+                            content_lines.append(f"  [yellow]▶[/yellow] {service_name}:")
+                            for name in workflow_names:
+                                content_lines.append(f"      ↳ {name}")
+                        else:
+                            content_lines.append(f"  [yellow]▶[/yellow] {service_name}: {len(running)} running")
+
+                # Show failed workflows by service (minimal, actionable)
+                if failed_workflows:
+                    content_lines.append("")
+                    for service_name, failed in sorted(failed_workflows.items()):
+                        workflow_names = [w.get("name", f"Pipeline #{w.get('id')}") for w in failed[:2]]  # Max 2 per service
+
+                        if len(failed) == 1:
+                            content_lines.append(f"  [red]✗[/red] {service_name}: {workflow_names[0]}")
+                        elif len(failed) <= 2:
+                            content_lines.append(f"  [red]✗[/red] {service_name}:")
+                            for name in workflow_names:
+                                content_lines.append(f"      ↳ {name}")
+                        else:
+                            content_lines.append(f"  [red]✗[/red] {service_name}: {len(failed)} failed")
+
+                content_lines.append("")
+                content_lines.append("[dim]Use --actions flag to see all workflow runs[/dim]")
+
+                # Display condensed summary panel
+                console.print(Panel(
+                    "\n".join(content_lines),
+                    title="Workflows Summary" if not is_gitlab else "Pipelines Summary",
+                    border_style="blue"
+                ))
+                console.print()
 
         # Next Steps / Quick Actions
         next_steps = []

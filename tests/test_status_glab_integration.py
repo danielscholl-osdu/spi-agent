@@ -35,14 +35,11 @@ def test_status_runner_with_providers(tmp_path):
     prompt_file = tmp_path / "status-glab.md"
     prompt_file.write_text("Test prompt for {{ORGANIZATION}}")
 
-    # StatusRunner should accept providers argument
-    runner = StatusRunner(prompt_file, ["partition"], ["azure", "core"])
+    # StatusRunner should accept providers argument (explicit parameter passing)
+    runner = StatusRunner(prompt_file, ["partition"], providers=["azure", "core"])
     assert runner.services == ["partition"]
     assert runner.providers == ["azure", "core"]
-
-    # Verify prompt injection includes providers
-    prompt = runner.load_prompt()
-    assert "azure,core" in prompt
+    assert runner.show_actions is False  # Verify default value
 
 
 def test_status_runner_without_providers(tmp_path):

@@ -143,7 +143,8 @@ class WorkflowResultStore:
             lines.append(f"**Summary:** {result.summary}")
 
             # Add workflow-specific details
-            if result.workflow_type == "vulns" and result.vulnerabilities:
+            # Handle both "vulns" and "triage" (legacy name) for vulnerability workflows
+            if result.workflow_type in ("vulns", "triage") and result.vulnerabilities:
                 lines.append("")
                 lines.append("**Vulnerabilities Found:**")
                 for svc, counts in result.vulnerabilities.items():

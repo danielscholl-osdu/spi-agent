@@ -373,8 +373,8 @@ class TestWorkflowIntegration:
         mock_agent.agent = Mock()
         mock_agent.agent.run = AsyncMock(return_value="Analysis complete: 3 critical")
 
-        # Mock TriageRunner from the copilot module where it's actually imported
-        with patch("spi_agent.copilot.runners.triage_runner.TriageRunner") as MockRunner:
+        # Mock VulnsRunner from the copilot module where it's actually imported
+        with patch("spi_agent.copilot.runners.vulns_runner.VulnsRunner") as MockRunner:
             mock_runner = Mock()
             mock_runner.run = AsyncMock(return_value=0)  # Success exit code
             mock_runner.tracker = Mock()
@@ -407,15 +407,15 @@ class TestWorkflowIntegration:
                 )
 
                 # Verify result
-                assert result.workflow_type == "triage"
+                assert result.workflow_type == "vulns"
                 assert result.status == "success"
                 assert result.services == ["partition"]
 
                 # Verify stored in result store
                 store = get_result_store()
-                stored_results = await store.get_recent("triage", limit=1)
+                stored_results = await store.get_recent("vulns", limit=1)
                 assert len(stored_results) == 1
-                assert stored_results[0].workflow_type == "triage"
+                assert stored_results[0].workflow_type == "vulns"
 
                 # Cleanup
                 reset_result_store()

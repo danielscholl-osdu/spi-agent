@@ -9,7 +9,7 @@ from spi_agent.observability import (
     record_llm_call,
     record_test_run,
     record_tool_call,
-    record_triage_scan,
+    record_vulns_scan,
     record_workflow_run,
 )
 
@@ -81,13 +81,13 @@ class TestWorkflowMetrics:
 class TestTriageMetrics:
     """Tests for triage scan metrics recording."""
 
-    def test_record_triage_scan_with_vulnerabilities(self):
+    def test_record_vulns_scan_with_vulnerabilities(self):
         """Test recording triage scan with vulnerabilities."""
         with patch("spi_agent.observability.triage_scans_counter") as mock_scan_counter:
             with patch(
                 "spi_agent.observability.triage_vulnerabilities_counter"
             ) as mock_vuln_counter:
-                record_triage_scan("partition", critical=5, high=10, medium=3, low=1)
+                record_vulns_scan("partition", critical=5, high=10, medium=3, low=1)
 
                 # Verify scan counter incremented
                 mock_scan_counter.add.assert_called_once()
@@ -104,13 +104,13 @@ class TestTriageMetrics:
                 assert 3 in counts  # medium
                 assert 1 in counts  # low
 
-    def test_record_triage_scan_no_vulnerabilities(self):
+    def test_record_vulns_scan_no_vulnerabilities(self):
         """Test recording triage scan with no vulnerabilities."""
         with patch("spi_agent.observability.triage_scans_counter") as mock_scan_counter:
             with patch(
                 "spi_agent.observability.triage_vulnerabilities_counter"
             ) as mock_vuln_counter:
-                record_triage_scan("partition", critical=0, high=0, medium=0)
+                record_vulns_scan("partition", critical=0, high=0, medium=0)
 
                 # Scan counter should still be incremented
                 mock_scan_counter.add.assert_called_once()
@@ -118,11 +118,11 @@ class TestTriageMetrics:
                 # No vulnerability counters should be incremented
                 mock_vuln_counter.add.assert_not_called()
 
-    def test_record_triage_scan_error_status(self):
+    def test_record_vulns_scan_error_status(self):
         """Test recording failed triage scan."""
         with patch("spi_agent.observability.triage_scans_counter") as mock_scan_counter:
             with patch("spi_agent.observability.triage_vulnerabilities_counter"):
-                record_triage_scan("partition", critical=0, high=0, medium=0, status="error")
+                record_vulns_scan("partition", critical=0, high=0, medium=0, status="error")
 
                 # Verify error status
                 mock_scan_counter.add.assert_called_once_with(

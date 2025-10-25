@@ -19,6 +19,7 @@ async def run_status_workflow(
     services: List[str],
     platform: str = "github",
     providers: Optional[List[str]] = None,
+    show_actions: bool = False,
 ) -> WorkflowResult:
     """Run status workflow for specified services.
 
@@ -29,6 +30,7 @@ async def run_status_workflow(
         services: List of service names to check
         platform: Platform to check ("github" or "gitlab")
         providers: Provider filters for GitLab (e.g., ["Azure", "Core"])
+        show_actions: Whether to show detailed workflow/pipeline action table (default: False)
 
     Returns:
         WorkflowResult with status data
@@ -55,7 +57,7 @@ async def run_status_workflow(
             is_gitlab = platform == "gitlab"
 
             # Create status runner
-            runner = StatusRunner(None, services, providers if is_gitlab else None)
+            runner = StatusRunner(None, services, providers if is_gitlab else None, show_actions)
 
             # Get status data using direct API client
             if is_gitlab:

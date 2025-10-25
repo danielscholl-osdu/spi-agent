@@ -108,6 +108,9 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
         if platform == "gitlab" and providers is None:
             providers = "Azure,Core"  # Default for GitLab
 
+        # Parse --actions flag
+        show_actions = "--actions" in parts
+
         # Auto-detect services if not specified
         services_arg = None
         available_services = None
@@ -144,6 +147,7 @@ async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optiona
             services=services,
             platform=platform,
             providers=providers_list,
+            show_actions=show_actions,
         )
         return None
 
@@ -854,6 +858,11 @@ Examples:
             "--provider",
             help="Provider label(s) for filtering (GitLab only, default: Azure,Core)",
         )
+        status_parser.add_argument(
+            "--actions",
+            action="store_true",
+            help="Show detailed workflow/pipeline action status table (hidden by default)",
+        )
 
         test_parser = subparsers.add_parser(
             "test",
@@ -1020,13 +1029,16 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             console.print(f"[red]Error:[/red] Invalid service(s): {', '.join(invalid)}", style="bold red")
             return 1
 
+        # Extract show_actions flag
+        show_actions = parsed.actions if hasattr(parsed, 'actions') else False
+
         # Setup providers for GitLab
         if platform == "gitlab":
             provider_arg = parsed.provider if parsed.provider else "Azure,Core"
             providers = [p.strip() for p in provider_arg.split(",")]
-            runner = copilot_module.StatusRunner(None, services, providers)
+            runner = copilot_module.StatusRunner(None, services, providers, show_actions)
         else:
-            runner = copilot_module.StatusRunner(None, services)
+            runner = copilot_module.StatusRunner(None, services, None, show_actions)
 
         # Use StatusRunner with direct API mode (fast, no AI)
         return await runner.run_direct()
