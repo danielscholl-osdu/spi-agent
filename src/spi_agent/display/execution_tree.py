@@ -267,10 +267,10 @@ class ExecutionTreeDisplay:
                 total_tools = sum(len(p.tool_nodes) for p in self._phases)
                 current_message_count = self._current_phase.llm_node.metadata.get("message_count", 0) if self._current_phase.llm_node else 0
 
-                phase_label = Text(
-                    f"{SYMBOL_ACTIVE} working... (msg:{current_message_count} tool:{total_tools})",
-                    style=COLOR_ACTIVE
-                )
+                # Create label with different styles for main text vs. counts
+                phase_label = Text()
+                phase_label.append(f"{SYMBOL_ACTIVE} working... ", style=COLOR_ACTIVE)
+                phase_label.append(f"(msg:{current_message_count} tool:{total_tools})", style="dim")
                 phase_tree = Tree(phase_label)
 
                 # Show LLM details if verbose
@@ -291,10 +291,10 @@ class ExecutionTreeDisplay:
                 final_phase = self._phases[-1] if self._phases else None
                 final_messages = final_phase.llm_node.metadata.get("message_count", 0) if (final_phase and final_phase.llm_node) else 0
 
-                summary_text = Text(
-                    f"⎿ [◉‿◉] Complete ({session_duration:.1f}s) - msg:{final_messages} tool:{total_tools}",
-                    style=COLOR_SUCCESS
-                )
+                # Create completion text with different styles
+                summary_text = Text()
+                summary_text.append(f"⎿ [◉‿◉] Complete ({session_duration:.1f}s) - ", style=COLOR_SUCCESS)
+                summary_text.append(f"msg:{final_messages} tool:{total_tools}", style="dim")
                 renderables.append(summary_text)
 
         # Display mode: DEFAULT (show active + completed summary)
