@@ -161,7 +161,7 @@ class ExecutionPhase:
 
     @property
     def summary(self) -> str:
-        """Get phase summary description."""
+        """Get phase summary description (for single phase view)."""
         tool_count = len(self.tool_nodes)
         message_count = self.llm_node.metadata.get("message_count", 0) if self.llm_node else 0
         return f"working... (Tools:{tool_count} Messages:{message_count})"
@@ -263,7 +263,14 @@ class ExecutionTreeDisplay:
         if self.display_mode == DisplayMode.MINIMAL:
             # Only show current phase if one exists
             if self._current_phase and self._current_phase.status == "in_progress":
-                phase_label = Text(f"{SYMBOL_ACTIVE} {self._current_phase.summary}", style=COLOR_ACTIVE)
+                # Calculate total tools across all phases for better progress indication
+                total_tools = sum(len(p.tool_nodes) for p in self._phases)
+                current_message_count = self._current_phase.llm_node.metadata.get("message_count", 0) if self._current_phase.llm_node else 0
+
+                phase_label = Text(
+                    f"{SYMBOL_ACTIVE} working... (Tools:{total_tools} Messages:{current_message_count})",
+                    style=COLOR_ACTIVE
+                )
                 phase_tree = Tree(phase_label)
 
                 # Show LLM details if verbose
