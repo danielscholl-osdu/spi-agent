@@ -268,7 +268,7 @@ class ExecutionTreeDisplay:
                 current_message_count = self._current_phase.llm_node.metadata.get("message_count", 0) if self._current_phase.llm_node else 0
 
                 phase_label = Text(
-                    f"{SYMBOL_ACTIVE} working... (Tools:{total_tools} Messages:{current_message_count})",
+                    f"{SYMBOL_ACTIVE} working... (msg:{current_message_count} tool:{total_tools})",
                     style=COLOR_ACTIVE
                 )
                 phase_tree = Tree(phase_label)
@@ -292,7 +292,7 @@ class ExecutionTreeDisplay:
                 final_messages = final_phase.llm_node.metadata.get("message_count", 0) if (final_phase and final_phase.llm_node) else 0
 
                 summary_text = Text(
-                    f"⎿ [◉‿◉] Complete ({session_duration:.1f}s) - Tools:{total_tools} Messages:{final_messages}",
+                    f"⎿ [◉‿◉] Complete ({session_duration:.1f}s) - msg:{final_messages} tool:{total_tools}",
                     style=COLOR_SUCCESS
                 )
                 renderables.append(summary_text)
