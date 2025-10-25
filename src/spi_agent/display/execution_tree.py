@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime
+from enum import Enum
 from typing import Dict, List, Optional
 
 from rich.console import Console, Group, RenderableType
@@ -21,6 +22,35 @@ from spi_agent.display.events import (
     WorkflowStepEvent,
     get_event_emitter,
 )
+
+
+class DisplayMode(Enum):
+    """Display mode for execution tree.
+
+    MINIMAL: Only show active phase (results-focused, default)
+    DEFAULT: Show active phase + completed phase count
+    VERBOSE: Show all phases with full details
+    """
+    MINIMAL = "minimal"
+    DEFAULT = "default"
+    VERBOSE = "verbose"
+
+
+# Symbol constants (minimal, Betty-themed)
+SYMBOL_QUERY = "◉"       # Session/query (Betty's eye)
+SYMBOL_COMPLETE = "•"    # Completed item
+SYMBOL_ACTIVE = "●"      # Active/running
+SYMBOL_TOOL = "→"        # Tool executing
+SYMBOL_SUCCESS = "◎"     # Complete session
+SYMBOL_ERROR = "✗"       # Error
+SYMBOL_BRANCH = "└─"     # Tree branch
+
+# Colors
+COLOR_QUERY = "cyan"
+COLOR_COMPLETE = "dim white"
+COLOR_ACTIVE = "yellow"
+COLOR_SUCCESS = "green"
+COLOR_ERROR = "red"
 
 
 class TreeNode:
@@ -76,6 +106,77 @@ class TreeNode:
             self.metadata["duration"] = duration
 
 
+class ExecutionPhase:
+    """Represents a reasoning phase (LLM thinking + associated tool calls).
+
+    A phase groups together:
+    - One LLM request/response pair
+    - Zero or more tool calls made during that thinking cycle
+
+    Attributes:
+        phase_number: Sequential phase number
+        llm_node: LLM thinking node (optional)
+        tool_nodes: Tool nodes executed in this phase
+        start_time: When phase started
+        end_time: When phase completed
+        status: Phase status (in_progress, completed, error)
+    """
+
+    def __init__(self, phase_number: int):
+        """Initialize execution phase.
+
+        Args:
+            phase_number: Sequential number for this phase
+        """
+        self.phase_number = phase_number
+        self.llm_node: Optional[TreeNode] = None
+        self.tool_nodes: List[TreeNode] = []
+        self.start_time = datetime.now()
+        self.end_time: Optional[datetime] = None
+        self.status = "in_progress"
+
+    def add_llm_node(self, node: TreeNode) -> None:
+        """Add LLM thinking node to this phase."""
+        self.llm_node = node
+
+    def add_tool_node(self, node: TreeNode) -> None:
+        """Add tool execution node to this phase."""
+        self.tool_nodes.append(node)
+
+    def complete(self) -> None:
+        """Mark phase as completed."""
+        self.status = "completed"
+        self.end_time = datetime.now()
+
+    def mark_error(self) -> None:
+        """Mark phase as error."""
+        self.status = "error"
+        self.end_time = datetime.now()
+
+    @property
+    def duration(self) -> float:
+        """Get phase duration in seconds."""
+        end = self.end_time or datetime.now()
+        return (end - self.start_time).total_seconds()
+
+    @property
+    def summary(self) -> str:
+        """Get phase summary description."""
+        tool_count = len(self.tool_nodes)
+        if tool_count == 0:
+            return f"Phase {self.phase_number}: Initial thinking"
+        elif tool_count == 1:
+            tool_name = self.tool_nodes[0].label.replace(SYMBOL_TOOL + " ", "").split(" ")[0]
+            return f"Phase {self.phase_number}: {tool_name}"
+        else:
+            return f"Phase {self.phase_number}: {tool_count} tool calls"
+
+    @property
+    def has_nodes(self) -> bool:
+        """Check if phase has any nodes."""
+        return self.llm_node is not None or len(self.tool_nodes) > 0
+
+
 class ExecutionTreeDisplay:
     """Hierarchical execution tree display using Rich Live.
 
@@ -83,13 +184,19 @@ class ExecutionTreeDisplay:
     in real-time using Rich's Live display with visual hierarchy.
     """
 
-    def __init__(self, console: Optional[Console] = None):
+    def __init__(
+        self,
+        console: Optional[Console] = None,
+        display_mode: DisplayMode = DisplayMode.MINIMAL,
+    ):
         """Initialize execution tree display.
 
         Args:
             console: Rich console to use (creates new one if not provided)
+            display_mode: Display verbosity level (MINIMAL, DEFAULT, VERBOSE)
         """
         self.console = console or Console()
+        self.display_mode = display_mode
         self._live: Optional[Live] = None
         self._root_nodes: List[TreeNode] = []
         self._node_map: Dict[str, TreeNode] = {}
@@ -97,6 +204,15 @@ class ExecutionTreeDisplay:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._is_rich_supported = self.console.is_terminal
+
+        # Phase tracking for grouping
+        self._phases: List[ExecutionPhase] = []
+        self._current_phase: Optional[ExecutionPhase] = None
+        self._session_start_time = datetime.now()
+
+        # Display configuration based on mode
+        self._auto_collapse_completed = (display_mode == DisplayMode.MINIMAL)
+        self._show_llm_details = (display_mode == DisplayMode.VERBOSE)
 
     def _create_node(self, event: ExecutionEvent, label: str) -> TreeNode:
         """Create a new tree node from an event.
@@ -159,11 +275,11 @@ class ExecutionTreeDisplay:
 
         # Status symbol
         if node.status == "in_progress":
-            symbol = "⏺"
+            symbol = SYMBOL_ACTIVE
         elif node.status == "completed":
-            symbol = "✓"
+            symbol = SYMBOL_COMPLETE
         else:  # error
-            symbol = "✗"
+            symbol = SYMBOL_ERROR
 
         # Build line
         line = f"{prefix}{symbol} {node.label}"
@@ -191,14 +307,14 @@ class ExecutionTreeDisplay:
         """
         # Status symbol and style
         if node.status == "in_progress":
-            symbol = "⏺"
-            style = "bold blue"
+            symbol = SYMBOL_ACTIVE
+            style = COLOR_ACTIVE
         elif node.status == "completed":
-            symbol = "⎿"
-            style = "dim"
+            symbol = SYMBOL_COMPLETE
+            style = COLOR_COMPLETE
         else:  # error
-            symbol = "✗"
-            style = "bold red"
+            symbol = SYMBOL_ERROR
+            style = COLOR_ERROR
 
         # Build label text
         label_parts = [symbol, " ", node.label]
@@ -258,7 +374,7 @@ class ExecutionTreeDisplay:
 
         if isinstance(event, ToolStartEvent):
             # Create node for tool start
-            label = f"🔧 {event.tool_name}"
+            label = f"{SYMBOL_TOOL} {event.tool_name}"
             if event.arguments:
                 # Add key arguments to label
                 if "repo" in event.arguments:
@@ -268,6 +384,11 @@ class ExecutionTreeDisplay:
                 elif "service" in event.arguments:
                     label += f" ({event.arguments['service']})"
             node = self._create_node(event, label)
+
+            # Add tool to current phase
+            if self._current_phase:
+                self._current_phase.add_tool_node(node)
+
             logger.debug(f"Created node for tool: {event.tool_name}, total nodes: {len(self._root_nodes)}")
 
         elif isinstance(event, ToolCompleteEvent):
@@ -285,7 +406,7 @@ class ExecutionTreeDisplay:
         elif isinstance(event, WorkflowStepEvent):
             # Create or update workflow step node
             if event.status == "started":
-                label = f"📋 {event.step_name}"
+                label = f"{SYMBOL_ACTIVE} {event.step_name}"
                 self._create_node(event, label)
             elif event.event_id in self._node_map:
                 node = self._node_map[event.event_id]
@@ -298,7 +419,7 @@ class ExecutionTreeDisplay:
 
         elif isinstance(event, SubprocessOutputEvent):
             # Create node for subprocess output (condensed)
-            label = f"💻 {event.command}"
+            label = f"{SYMBOL_TOOL} {event.command}"
             if event.event_id not in self._node_map:
                 node = self._create_node(event, label)
                 node.metadata["output_lines"] = [event.output_line]
@@ -307,8 +428,20 @@ class ExecutionTreeDisplay:
                 node.metadata.setdefault("output_lines", []).append(event.output_line)
 
         elif isinstance(event, LLMRequestEvent):
-            label = f"🤖 Thinking with AI ({event.message_count} messages)"
-            self._create_node(event, label)
+            # Start a new reasoning phase
+            if self._current_phase and self._current_phase.has_nodes:
+                # Complete previous phase before starting new one
+                self._current_phase.complete()
+
+            # Create new phase
+            phase_num = len(self._phases) + 1
+            self._current_phase = ExecutionPhase(phase_num)
+            self._phases.append(self._current_phase)
+
+            # Create LLM node
+            label = f"Thinking ({event.message_count} messages)"
+            node = self._create_node(event, label)
+            self._current_phase.add_llm_node(node)
 
         elif isinstance(event, LLMResponseEvent):
             if event.event_id in self._node_map:
