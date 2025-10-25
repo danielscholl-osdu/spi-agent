@@ -29,7 +29,8 @@ def test_execution_phase_with_tools():
 
     assert len(phase.tool_nodes) == 1
     assert phase.has_nodes is True
-    assert "test_tool" in phase.summary
+    assert "Tools:1" in phase.summary  # New format shows count
+    assert "test_tool" in phase.verbose_summary  # Verbose mode shows tool name
 
 
 def test_execution_phase_summary():
@@ -38,18 +39,23 @@ def test_execution_phase_summary():
 
     phase = ExecutionPhase(phase_number=2)
 
-    # No tools
-    assert "Initial thinking" in phase.summary
+    # No tools - shows working with counts
+    assert "working..." in phase.summary
+    assert "Tools:0" in phase.summary
 
     # One tool
     tool_node = TreeNode("tool-1", "tool", f"{SYMBOL_TOOL} read_file")
     phase.add_tool_node(tool_node)
-    assert "read_file" in phase.summary
+    assert "Tools:1" in phase.summary
 
     # Multiple tools
     tool_node2 = TreeNode("tool-2", "tool", f"{SYMBOL_TOOL} list_files")
     phase.add_tool_node(tool_node2)
-    assert "2 tool calls" in phase.summary
+    assert "Tools:2" in phase.summary
+
+    # Test verbose_summary still has phase details
+    assert "Phase 2" in phase.verbose_summary
+    assert "read_file" in phase.verbose_summary or "2 tool calls" in phase.verbose_summary
 
 
 def test_execution_tree_display_mode_minimal():

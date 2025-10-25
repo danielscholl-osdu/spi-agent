@@ -163,6 +163,13 @@ class ExecutionPhase:
     def summary(self) -> str:
         """Get phase summary description."""
         tool_count = len(self.tool_nodes)
+        message_count = self.llm_node.metadata.get("message_count", 0) if self.llm_node else 0
+        return f"working... (Tools:{tool_count} Messages:{message_count})"
+
+    @property
+    def verbose_summary(self) -> str:
+        """Get verbose phase summary for VERBOSE mode."""
+        tool_count = len(self.tool_nodes)
         if tool_count == 0:
             return f"Phase {self.phase_number}: Thinking"
         elif tool_count == 1:
@@ -272,9 +279,9 @@ class ExecutionTreeDisplay:
                 # No progress line in MINIMAL mode - just show what's happening
 
             elif completed_count == total_phases and total_phases > 0:
-                # All done - show minimal summary
+                # All done - show minimal summary with Betty's face
                 summary_text = Text(
-                    f"{SYMBOL_SUCCESS} Complete ({session_duration:.1f}s)",
+                    f"⎿ [◉‿◉] Complete ({session_duration:.1f}s)",
                     style=COLOR_SUCCESS
                 )
                 renderables.append(summary_text)
@@ -285,7 +292,7 @@ class ExecutionTreeDisplay:
             for phase in self._phases[:-1]:  # All but current
                 if phase.status == "completed":
                     phase_text = Text(
-                        f"{SYMBOL_COMPLETE} {phase.summary} ({phase.duration:.1f}s)",
+                        f"{SYMBOL_COMPLETE} {phase.verbose_summary} ({phase.duration:.1f}s)",
                         style=COLOR_COMPLETE
                     )
                     renderables.append(phase_text)
@@ -314,8 +321,9 @@ class ExecutionTreeDisplay:
                     symbol = SYMBOL_ERROR
                     style = COLOR_ERROR
 
+                # Use verbose_summary for detailed phase names in VERBOSE mode
                 phase_label = Text(
-                    f"{symbol} {phase.summary} ({phase.duration:.1f}s)",
+                    f"{symbol} {phase.verbose_summary} ({phase.duration:.1f}s)",
                     style=style
                 )
                 phase_tree = Tree(phase_label)
@@ -539,9 +547,10 @@ class ExecutionTreeDisplay:
             self._current_phase = ExecutionPhase(phase_num)
             self._phases.append(self._current_phase)
 
-            # Create LLM node
+            # Create LLM node and store message count in metadata
             label = f"Thinking ({event.message_count} messages)"
             node = self._create_node(event, label)
+            node.metadata["message_count"] = event.message_count
             self._current_phase.add_llm_node(node)
 
         elif isinstance(event, LLMResponseEvent):
