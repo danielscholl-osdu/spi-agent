@@ -87,62 +87,63 @@ When users ask about commands or CLI options, execute the relevant help command 
 12. Create pull requests from branches
 13. Update PR metadata (title, body, state, labels, assignees)
 14. Convert draft PR to ready for review (use gh_update_pull_request with draft=False)
-15. Merge pull requests with specified merge method
-16. Add comments to PR discussions
+15. Review pull requests: approve, request changes, or comment (use gh_review_pull_request)
+16. Merge pull requests with specified merge method (default: squash)
+17. Add comments to PR discussions
 
 ### WORKFLOWS & ACTIONS:
-17. List available workflows in repositories
-18. List recent workflow runs with filtering
-19. Get detailed workflow run information (jobs, timing, status)
-20. Trigger workflows manually (if workflow_dispatch enabled)
-21. Cancel running or queued workflows
-22. Check if PR workflows are awaiting approval
-23. Approve pending workflow runs for a PR (tries fork approval, falls back to rerun)
-24. Rerun workflow runs (also serves as approval for action_required workflows)
+18. List available workflows in repositories
+19. List recent workflow runs with filtering
+20. Get detailed workflow run information (jobs, timing, status)
+21. Trigger workflows manually (if workflow_dispatch enabled)
+22. Cancel running or queued workflows
+23. Check if PR workflows are awaiting approval
+24. Approve pending workflow runs for a PR (tries fork approval, falls back to rerun)
+25. Rerun workflow runs (also serves as approval for action_required workflows)
 
 ### CODE SCANNING:
-25. List code scanning alerts with filtering (state, severity)
-26. Get detailed code scanning alert information (vulnerability details, location, remediation)
+26. List code scanning alerts with filtering (state, severity)
+27. Get detailed code scanning alert information (vulnerability details, location, remediation)
 
 ### GITLAB ISSUES (when GitLab configured):
-27. List GitLab issues with filtering (state, labels, assignee)
-28. Get detailed GitLab issue information
-29. Get GitLab issue notes/comments
-30. Create new GitLab issues
-31. Update GitLab issues
-32. Add notes to GitLab issues
-33. Search issues across GitLab projects
+28. List GitLab issues with filtering (state, labels, assignee)
+29. Get detailed GitLab issue information
+30. Get GitLab issue notes/comments
+31. Create new GitLab issues
+32. Update GitLab issues
+33. Add notes to GitLab issues
+34. Search issues across GitLab projects
 
 ### GITLAB MERGE REQUESTS (when GitLab configured):
-34. List GitLab merge requests with filtering
-35. Get detailed MR information (including merge status)
-36. Get MR discussion notes
-37. Create merge requests from branches
-38. Update MR metadata
-39. Merge merge requests
-40. Add notes to merge requests
+35. List GitLab merge requests with filtering
+36. Get detailed MR information (including merge status)
+37. Get MR discussion notes
+38. Create merge requests from branches
+39. Update MR metadata
+40. Merge merge requests
+41. Add notes to merge requests
 
 ### GITLAB PIPELINES (when GitLab configured):
-41. List GitLab CI/CD pipelines with status filters
-42. Get detailed pipeline information with job details
-43. Get pipeline jobs
-44. Trigger pipelines manually with variables
-45. Cancel running pipelines
-46. Retry failed pipelines
+42. List GitLab CI/CD pipelines with status filters
+43. Get detailed pipeline information with job details
+44. Get pipeline jobs
+45. Trigger pipelines manually with variables
+46. Cancel running pipelines
+47. Retry failed pipelines
 
 ### FILE SYSTEM OPERATIONS:
-47. List files recursively with pattern matching (e.g., find all pom.xml files)
-48. Read file contents (with optional line limits for large files)
-49. Search in files with regex patterns (grep-like functionality with context)
-50. Parse POM files and extract dependencies with version resolution
-51. Find specific dependency versions across all repositories
+48. List files recursively with pattern matching (e.g., find all pom.xml files)
+49. Read file contents (with optional line limits for large files)
+50. Search in files with regex patterns (grep-like functionality with context)
+51. Parse POM files and extract dependencies with version resolution
+52. Find specific dependency versions across all repositories
 
 ### MAVEN DEPENDENCY MANAGEMENT (when available):
-52. Check single dependency version and discover available updates
-53. Check multiple dependencies in batch for efficiency
-54. List all available versions grouped by tracks (major/minor/patch)
-55. Scan Java projects for security vulnerabilities using Trivy
-56. Analyze POM files for dependency issues and best practices
+53. Check single dependency version and discover available updates
+54. Check multiple dependencies in batch for efficiency
+55. List all available versions grouped by tracks (major/minor/patch)
+56. Scan Java projects for security vulnerabilities using Trivy
+57. Analyze POM files for dependency issues and best practices
 
 ## Workflows
 
@@ -234,6 +235,7 @@ When analyzing code scanning alerts, always:
 - Verify issue/PR state before attempting updates
 - Check PR merge readiness before attempting merge
 - Check workflow run status before triggering new runs
+- Users often reference items by display names from tool output (e.g., 'CodeQL Analysis' from /status). Map these to technical identifiers needed by APIs (workflows need filenames like 'codeql.yml'). List available items first if mapping is unclear.
 - Suggest appropriate labels based on issue/PR content
 - For code scanning alerts, include severity and rule information when creating issues
 - When creating issues for Maven vulnerabilities, include CVE IDs, CVSS scores, and affected versions

@@ -363,13 +363,85 @@ class PullRequestTools(GitHubToolsBase):
         except Exception as e:
             return f"Error updating pull request: {str(e)}"
 
+    def review_pull_request(
+        self,
+        repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
+        pr_number: Annotated[int, Field(description="Pull request number")],
+        event: Annotated[
+            str,
+            Field(description="Review event: 'APPROVE', 'REQUEST_CHANGES', or 'COMMENT'")
+        ],
+        body: Annotated[
+            Optional[str], Field(description="Review comment/feedback (optional for APPROVE)")
+        ] = None,
+    ) -> str:
+        """
+        Submit a review for a pull request.
+
+        Use 'APPROVE' to approve, 'REQUEST_CHANGES' to request changes (body required),
+        or 'COMMENT' for feedback without approval/rejection.
+
+        Returns formatted string with review confirmation.
+        """
+        try:
+            repo_full_name = self.config.get_repo_full_name(repo)
+            gh_repo = self.github.get_repo(repo_full_name)
+            pr = gh_repo.get_pull(pr_number)
+
+            # Validate event
+            valid_events = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
+            event_upper = event.upper()
+            if event_upper not in valid_events:
+                return f"Invalid review event '{event}'. Must be one of: {', '.join(valid_events)}"
+
+            # REQUEST_CHANGES requires a body
+            if event_upper == "REQUEST_CHANGES" and not body:
+                return "Review body is required when requesting changes"
+
+            # Submit review
+            review = pr.create_review(
+                body=body or "",
+                event=event_upper
+            )
+
+            # Format response based on event type
+            event_msg = {
+                "APPROVE": "✓ Approved",
+                "REQUEST_CHANGES": "⚠ Requested changes on",
+                "COMMENT": "💬 Commented on"
+            }.get(event_upper, "Reviewed")
+
+            output = [
+                f"{event_msg} pull request #{pr_number} in {repo_full_name}\n",
+                f"Title: {pr.title}\n",
+                f"Review ID: {review.id}\n",
+            ]
+
+            if body:
+                output.append(f"Comment: {body[:100]}{'...' if len(body) > 100 else ''}\n")
+
+            output.append(f"PR URL: {pr.html_url}\n")
+
+            return "".join(output)
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"Pull request #{pr_number} not found in {repo}"
+            elif e.status == 422:
+                msg = e.data.get('message', '')
+                if 'review' in msg.lower():
+                    return f"Cannot submit review: {msg}"
+            return f"GitHub API error: {e.data.get('message', str(e))}"
+        except Exception as e:
+            return f"Error reviewing pull request: {str(e)}"
+
     def merge_pull_request(
         self,
         repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
         pr_number: Annotated[int, Field(description="Pull request number")],
         merge_method: Annotated[
             str, Field(description="Merge method: 'merge', 'squash', or 'rebase'")
-        ] = "merge",
+        ] = "squash",
         commit_title: Annotated[Optional[str], Field(description="Custom merge commit title")] = None,
         commit_message: Annotated[
             Optional[str], Field(description="Custom merge commit message")

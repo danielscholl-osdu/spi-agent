@@ -116,6 +116,10 @@ class GitHubTools:
         """Update pull request metadata."""
         return self._pull_requests.update_pull_request(*args, **kwargs)
 
+    def review_pull_request(self, *args, **kwargs):
+        """Submit a review for a pull request (approve, request changes, or comment)."""
+        return self._pull_requests.review_pull_request(*args, **kwargs)
+
     def merge_pull_request(self, *args, **kwargs):
         """Merge a pull request."""
         return self._pull_requests.merge_pull_request(*args, **kwargs)
@@ -227,9 +231,9 @@ def create_github_tools(config: AgentConfig) -> List:
         config: Agent configuration containing GitHub token and org info
 
     Returns:
-        List of 27 bound tool methods with 'gh_' prefix organized by domain:
+        List of 28 bound tool methods with 'gh_' prefix organized by domain:
         - Issues (8 tools): gh_list_issues, gh_get_issue, gh_create_issue, etc.
-        - Pull Requests (7 tools): gh_list_pull_requests, gh_get_pull_request, etc.
+        - Pull Requests (8 tools): gh_list_pull_requests, gh_get_pull_request, gh_review_pull_request, etc.
         - Workflows/Actions (8 tools): gh_list_workflows, gh_trigger_workflow, gh_approve_pr_workflows, etc.
         - Code Scanning (2 tools): gh_list_code_scanning_alerts, gh_get_code_scanning_alert
         - Repository Variables (2 tools): gh_get_repository_variables, gh_get_repository_variable
@@ -254,12 +258,13 @@ def create_github_tools(config: AgentConfig) -> List:
         _prefix_tool_name(issues.add_issue_comment),
         _prefix_tool_name(issues.search_issues),
         _prefix_tool_name(issues.assign_issue_to_copilot),
-        # Pull Requests (7 tools)
+        # Pull Requests (8 tools)
         _prefix_tool_name(pull_requests.list_pull_requests),
         _prefix_tool_name(pull_requests.get_pull_request),
         _prefix_tool_name(pull_requests.get_pr_comments),
         _prefix_tool_name(pull_requests.create_pull_request),
         _prefix_tool_name(pull_requests.update_pull_request),
+        _prefix_tool_name(pull_requests.review_pull_request),
         _prefix_tool_name(pull_requests.merge_pull_request),
         _prefix_tool_name(pull_requests.add_pr_comment),
         # Workflows/Actions (8 tools)

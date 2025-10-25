@@ -310,6 +310,7 @@ class GitHubDirectClient:
         return {
             "id": run.id,
             "name": run.name,
+            "path": run.path,  # Workflow filename (e.g., ".github/workflows/codeql.yml")
             "status": run.status,
             "conclusion": run.conclusion,
             "event": run.event,

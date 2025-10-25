@@ -193,6 +193,10 @@ class WorkflowResultStore:
             elif result.workflow_type == "status" and result.pr_status:
                 lines.append("")
                 lines.append("**Status Information:**")
+
+                # Track unique workflows needing attention across all services
+                actionable_workflows = {}  # {workflow_name: filename}
+
                 for svc, status in result.pr_status.items():
                     open_prs = status.get("open_prs", 0)
                     open_issues = status.get("open_issues", 0)
@@ -205,6 +209,42 @@ class WorkflowResultStore:
                         status_line += f", {workflows_needing_approval} workflows need approval"
                     lines.append(status_line)
 
+                    # Extract actionable workflows from detailed results
+                    status_data = result.detailed_results.get("status_data", {})
+                    service_data = status_data.get("services", {}).get(svc, {})
+                    workflows_data = service_data.get("workflows", {}).get("recent", [])
+
+                    for workflow in workflows_data:
+                        conclusion = workflow.get("conclusion")
+                        if conclusion in ["action_required", "failure", "cancelled"]:
+                            workflow_name = workflow.get("name")
+                            workflow_path = workflow.get("path", "")
+                            # Extract just the filename (e.g., "codeql.yml" from ".github/workflows/codeql.yml")
+                            workflow_filename = workflow_path.split("/")[-1] if workflow_path else None
+                            if workflow_name and workflow_filename:
+                                actionable_workflows[workflow_name] = workflow_filename
+
+                # Add workflow name→filename mapping (only if there are actionable workflows)
+                if actionable_workflows:
+                    lines.append("")
+                    lines.append("**Workflow Reference** (for triggering):")
+                    for name, filename in sorted(actionable_workflows.items()):
+                        lines.append(f"  - '{name}' → `{filename}`")
+                    lines.append("")
+
+                # Move back to the service loop for PR/issue details
+                for svc, status in result.pr_status.items():
+                    pr_details = status.get("pr_details", [])
+                    issue_details = status.get("issue_details", [])
+
+                    # Get full PR data from detailed results for merge/review status
+                    status_data = result.detailed_results.get("status_data", {})
+                    service_data = status_data.get("services", {}).get(svc, {})
+                    full_prs = service_data.get("pull_requests", {}).get("items", [])
+
+                    # Create lookup by PR number for enrichment
+                    pr_lookup = {pr.get("number"): pr for pr in full_prs}
+
                     # Include details about ALL PRs (not just ones with pending workflows)
                     if pr_details:
                         for pr in pr_details:
@@ -214,15 +254,40 @@ class WorkflowResultStore:
                             is_draft = pr.get("is_draft", False)
                             workflows_pending = pr.get("workflows_pending", 0)
 
+                            # Get enriched PR data
+                            full_pr = pr_lookup.get(pr_num, {})
+                            approved_count = full_pr.get("approved_count", 0)
+                            changes_requested = full_pr.get("changes_requested", False)
+                            mergeable_state = full_pr.get("mergeable_state", "unknown")
+                            is_release = full_pr.get("is_release", False)
+
                             # Build PR description
                             pr_desc = f"  - PR #{pr_num}"
                             if is_draft:
                                 pr_desc += " (DRAFT)"
+                            if is_release:
+                                pr_desc += " [RELEASE]"
                             pr_desc += f": {pr_title[:60]}"
+
+                            # Add review status
+                            if changes_requested:
+                                pr_desc += " ⚠ changes requested"
+                            elif approved_count > 0:
+                                pr_desc += f" ✓ {approved_count} approval(s)"
+                            else:
+                                pr_desc += " ⊙ no reviews"
+
+                            # Add merge status
+                            if mergeable_state == "blocked":
+                                pr_desc += " | ⊘ blocked"
+                            elif mergeable_state == "clean":
+                                pr_desc += " | ✓ ready to merge"
+                            elif mergeable_state in ["unstable", "dirty"]:
+                                pr_desc += f" | ⚠ {mergeable_state}"
 
                             # Add workflow status if relevant
                             if workflows_pending > 0:
-                                pr_desc += f" ({workflows_pending} workflows pending)"
+                                pr_desc += f" | {workflows_pending} workflows pending"
 
                             lines.append(pr_desc)
 

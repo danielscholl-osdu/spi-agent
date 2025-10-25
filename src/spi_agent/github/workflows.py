@@ -235,7 +235,7 @@ class WorkflowTools(GitHubToolsBase):
     def trigger_workflow(
         self,
         repo: Annotated[str, Field(description="Repository name (e.g., 'partition')")],
-        workflow_name_or_id: Annotated[str, Field(description="Workflow filename or ID")],
+        workflow_name_or_id: Annotated[str, Field(description="Workflow filename, display name, or ID")],
         ref: Annotated[str, Field(description="Branch/tag/SHA to run on")] = "main",
         inputs: Annotated[
             Optional[str], Field(description="JSON string of workflow inputs")
@@ -244,16 +244,31 @@ class WorkflowTools(GitHubToolsBase):
         """
         Manually trigger a workflow (workflow_dispatch).
 
+        Accepts workflow filename (e.g., 'codeql.yml'), display name (e.g., 'CodeQL Analysis'), or ID.
+        Automatically maps display names to filenames if needed.
+
         Returns formatted string with trigger confirmation.
         """
         try:
             repo_full_name = self.config.get_repo_full_name(repo)
             gh_repo = self.github.get_repo(repo_full_name)
 
-            # Get workflow
+            # Try to get workflow by filename/ID first
+            workflow = None
             try:
                 workflow = gh_repo.get_workflow(workflow_name_or_id)
             except:
+                # If not found by filename/ID, try to find by display name
+                try:
+                    workflows = gh_repo.get_workflows()
+                    for wf in workflows:
+                        if wf.name.lower() == workflow_name_or_id.lower():
+                            workflow = wf
+                            break
+                except:
+                    pass
+
+            if not workflow:
                 return f"Workflow '{workflow_name_or_id}' not found in {repo_full_name}"
 
             # Parse inputs if provided
