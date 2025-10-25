@@ -16,7 +16,7 @@ async def test_activity_tracker_reset():
 
     # Reset should clear back to starting state
     await tracker.reset()
-    assert tracker.get_current() == "Starting..."
+    assert tracker.get_current() == "Thinking..."
 
 
 @pytest.mark.asyncio
@@ -27,11 +27,11 @@ async def test_activity_tracker_reset_thread_safe():
     # Update and reset multiple times
     await tracker.update("Activity 1")
     await tracker.reset()
-    assert tracker.get_current() == "Starting..."
+    assert tracker.get_current() == "Thinking..."
 
     await tracker.update("Activity 2")
     await tracker.reset()
-    assert tracker.get_current() == "Starting..."
+    assert tracker.get_current() == "Thinking..."
 
 
 @pytest.mark.asyncio
@@ -48,7 +48,7 @@ async def test_activity_tracker_get_current_after_reset():
     await tracker.reset()
 
     # Should be back to starting state
-    assert tracker.get_current() == "Starting..."
+    assert tracker.get_current() == "Thinking..."
 
     # Can be updated again after reset
     await tracker.update("New activity after reset")

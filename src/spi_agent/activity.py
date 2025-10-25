@@ -5,7 +5,7 @@ visibility into what the agent is doing during query execution.
 """
 
 import asyncio
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 class ActivityTracker:
@@ -19,6 +19,7 @@ class ActivityTracker:
         """Initialize activity tracker."""
         self._current_activity = "Thinking..."
         self._lock = asyncio.Lock()
+        self._current_event_id: Optional[str] = None
 
     async def update(self, activity: str) -> None:
         """Update current activity.
@@ -28,6 +29,89 @@ class ActivityTracker:
         """
         async with self._lock:
             self._current_activity = activity
+
+    def emit_tool_start(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> str:
+        """Emit a tool start event if in interactive mode.
+
+        Args:
+            tool_name: Name of the tool starting
+            arguments: Tool arguments (will be sanitized)
+
+        Returns:
+            Event ID for tracking
+        """
+        from spi_agent.display import ToolStartEvent, get_event_emitter, is_interactive_mode
+
+        if not is_interactive_mode():
+            return ""
+
+        # Sanitize arguments (remove sensitive fields)
+        safe_args = None
+        if arguments and isinstance(arguments, dict):
+            safe_args = {
+                k: v
+                for k, v in arguments.items()
+                if k not in ["token", "api_key", "password", "secret", "credential"]
+            }
+
+        # Create and emit event
+        event = ToolStartEvent(tool_name=tool_name, arguments=safe_args)
+        emitter = get_event_emitter()
+        emitter.emit(event)
+
+        # Store event ID for completion tracking
+        self._current_event_id = event.event_id
+        return event.event_id
+
+    def emit_tool_complete(
+        self, tool_name: str, result_summary: str, duration: float
+    ) -> None:
+        """Emit a tool complete event if in interactive mode.
+
+        Args:
+            tool_name: Name of the tool that completed
+            result_summary: Human-readable result summary
+            duration: Execution duration in seconds
+        """
+        from spi_agent.display import ToolCompleteEvent, get_event_emitter, is_interactive_mode
+
+        if not is_interactive_mode():
+            return
+
+        # Create event with same ID as start event for correlation
+        event = ToolCompleteEvent(
+            tool_name=tool_name, result_summary=result_summary, duration=duration
+        )
+        if self._current_event_id:
+            event.event_id = self._current_event_id
+            self._current_event_id = None
+
+        emitter = get_event_emitter()
+        emitter.emit(event)
+
+    def emit_tool_error(self, tool_name: str, error_message: str, duration: float) -> None:
+        """Emit a tool error event if in interactive mode.
+
+        Args:
+            tool_name: Name of the tool that failed
+            error_message: Error message
+            duration: Execution duration before error in seconds
+        """
+        from spi_agent.display import ToolErrorEvent, get_event_emitter, is_interactive_mode
+
+        if not is_interactive_mode():
+            return
+
+        # Create event with same ID as start event for correlation
+        event = ToolErrorEvent(
+            tool_name=tool_name, error_message=error_message, duration=duration
+        )
+        if self._current_event_id:
+            event.event_id = self._current_event_id
+            self._current_event_id = None
+
+        emitter = get_event_emitter()
+        emitter.emit(event)
 
     def get_current(self) -> str:
         """Get current activity (thread-safe read).
@@ -45,6 +129,7 @@ class ActivityTracker:
         """
         async with self._lock:
             self._current_activity = "Thinking..."
+            self._current_event_id = None
 
     def format_tool_name(self, tool: str) -> str:
         """Format tool name for user-friendly display.

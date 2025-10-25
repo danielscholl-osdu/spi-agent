@@ -563,6 +563,14 @@ async def run_chat_mode(quiet: bool = False) -> int:
     """Run interactive chat mode."""
     config = AgentConfig()
 
+    # Set execution context for interactive mode
+    from spi_agent.display import ExecutionContext, set_execution_context
+
+    execution_context = ExecutionContext(
+        is_interactive=True, show_visualization=not quiet
+    )
+    set_execution_context(execution_context)
+
     # Initialize Maven MCP if enabled
     maven_mcp = MavenMCPManager(config)
 
@@ -677,38 +685,77 @@ async def run_chat_mode(quiet: bool = False) -> int:
                         console.print(f"\n[red]{error}[/red]\n")
                     continue
 
-                # Use dynamic status display that updates based on agent activity
-                from spi_agent.activity import get_activity_tracker
+                # Use execution tree display if visualization enabled, otherwise simple status
+                if execution_context.show_visualization:
+                    from spi_agent.display.execution_tree import ExecutionTreeDisplay
+                    from spi_agent.display.interrupt_handler import InterruptHandler
 
-                activity_tracker = get_activity_tracker()
+                    # Create interrupt handler for graceful cancellation
+                    interrupt_handler = InterruptHandler()
 
-                # Create async task to update status dynamically
-                status_handle = console.status("[bold blue]Thinking...[/bold blue]", spinner="dots")
-                status_handle.start()
+                    # Create execution tree display
+                    tree_display = ExecutionTreeDisplay(console=console)
 
-                async def update_status():
-                    """Background task to poll activity tracker and update status."""
                     try:
-                        while True:
-                            activity = activity_tracker.get_current()
-                            status_handle.update(f"[bold blue]{activity}[/bold blue]")
-                            await asyncio.sleep(0.1)  # Update 10x per second
+                        # Start tree display (event processing runs in background)
+                        await tree_display.start()
+
+                        # Ensure EventEmitter sees interactive mode flag right before spawning task
+                        # This is critical because agent framework tasks need to see this state
+                        from spi_agent.display.events import get_event_emitter
+                        emitter = get_event_emitter()
+                        emitter.set_interactive_mode(True, execution_context.show_visualization)
+
+                        # Create agent query task (will inherit interactive mode from EventEmitter)
+                        agent_task = asyncio.create_task(agent.agent.run(query, thread=thread))
+                        interrupt_handler.register_cancellable_task(agent_task)
+
+                        # Wait for agent task
+                        result = await agent_task
+
                     except asyncio.CancelledError:
-                        pass
+                        # Operation was cancelled (Ctrl+C)
+                        console.print("\n[yellow]Operation cancelled[/yellow]\n")
+                        continue
+                    finally:
+                        # Stop tree display
+                        await tree_display.stop()
 
-                # Start background status updater
-                update_task = asyncio.create_task(update_status())
+                        # Reset interactive mode flag after task completes
+                        emitter.set_interactive_mode(False, False)
 
-                try:
-                    result = await agent.agent.run(query, thread=thread)
-                finally:
-                    # Stop status updater and clear status line
-                    update_task.cancel()
+                else:
+                    # Fallback to simple status display (--quiet mode)
+                    from spi_agent.activity import get_activity_tracker
+
+                    activity_tracker = get_activity_tracker()
+
+                    status_handle = console.status("[bold blue]Thinking...[/bold blue]", spinner="dots")
+                    status_handle.start()
+
+                    async def update_status():
+                        """Background task to poll activity tracker and update status."""
+                        try:
+                            while True:
+                                activity = activity_tracker.get_current()
+                                status_handle.update(f"[bold blue]{activity}[/bold blue]")
+                                await asyncio.sleep(0.1)  # Update 10x per second
+                        except asyncio.CancelledError:
+                            pass
+
+                    # Start background status updater
+                    update_task = asyncio.create_task(update_status())
+
                     try:
-                        await update_task
-                    except asyncio.CancelledError:
-                        pass
-                    status_handle.stop()
+                        result = await agent.agent.run(query, thread=thread)
+                    finally:
+                        # Stop status updater and clear status line
+                        update_task.cancel()
+                        try:
+                            await update_task
+                        except asyncio.CancelledError:
+                            pass
+                        status_handle.stop()
 
                 result_text = str(result) if not isinstance(result, str) else result
 
@@ -735,8 +782,30 @@ async def run_chat_mode(quiet: bool = False) -> int:
     return 0
 
 
-async def run_single_query(prompt: str, quiet: bool = False) -> int:
-    """Run a single query with Rich output."""
+async def run_single_query(prompt: str, quiet: bool = False, verbose: bool = False) -> int:
+    """Run a single query with Rich output.
+
+    Args:
+        prompt: Query to execute
+        quiet: Suppress output headers
+        verbose: Show detailed execution tree with tool calls
+    """
+    # CRITICAL: Set execution context FIRST, before any agent initialization
+    # This ensures EventEmitter has interactive mode set when SPIAgent initializes
+    if verbose:
+        from spi_agent.display import ExecutionContext, set_execution_context
+        from spi_agent.display.events import get_event_emitter
+
+        execution_context = ExecutionContext(
+            is_interactive=True, show_visualization=True
+        )
+        set_execution_context(execution_context)
+
+        # Also set on EventEmitter immediately (before agent initialization)
+        emitter = get_event_emitter()
+        emitter.set_interactive_mode(True, True)
+
+    # Now safe to create agent (will see interactive mode if verbose=True)
     config = AgentConfig()
 
     # Initialize Maven MCP if enabled
@@ -746,7 +815,7 @@ async def run_single_query(prompt: str, quiet: bool = False) -> int:
         # Create agent with Maven MCP tools if available
         agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
 
-        if not quiet:
+        if not quiet and not verbose:
             maven_status = "enabled" if maven_mcp.is_available else "disabled"
             console.print(
                 Panel(
@@ -760,14 +829,33 @@ async def run_single_query(prompt: str, quiet: bool = False) -> int:
             console.print()
 
         try:
-            with console.status("[bold blue]Processing query...[/bold blue]", spinner="dots"):
-                result = await agent.run(prompt)
+            if verbose:
+                # Use execution tree display for verbose mode
+                from spi_agent.display.execution_tree import ExecutionTreeDisplay
+                from spi_agent.display.events import get_event_emitter
+
+                tree_display = ExecutionTreeDisplay(console=console)
+
+                # Create a new thread for the single query
+                thread = agent.agent.get_new_thread()
+
+                async with tree_display:
+                    # Interactive mode already set at function start
+                    result = await agent.agent.run(prompt, thread=thread)
+
+            else:
+                # Use simple status spinner for normal mode
+                with console.status("[bold blue]Processing query...[/bold blue]", spinner="dots"):
+                    # Create a new thread for the single query
+                    thread = agent.agent.get_new_thread()
+                    result = await agent.agent.run(prompt, thread=thread)
 
             result_text = str(result) if not isinstance(result, str) else result
 
             if quiet:
                 console.print(result_text)
             else:
+                console.print()
                 console.print(
                     Panel(
                         Markdown(result_text),
@@ -782,6 +870,13 @@ async def run_single_query(prompt: str, quiet: bool = False) -> int:
         except Exception as exc:  # pylint: disable=broad-except
             console.print(f"[red]Error:[/red] {exc}", style="bold red")
             return 1
+
+        finally:
+            # Reset EventEmitter interactive mode if it was set
+            if verbose:
+                from spi_agent.display.events import get_event_emitter
+                emitter = get_event_emitter()
+                emitter.set_interactive_mode(False, False)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -973,6 +1068,12 @@ Examples:
         "--quiet",
         action="store_true",
         help="Minimal output",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show detailed execution tree with tool calls (single-query mode only)",
     )
 
     return parser
@@ -1332,7 +1433,7 @@ async def async_main(args: Optional[list[str]] = None) -> int:
             return await runner.run()
 
     if parsed.prompt:
-        return await run_single_query(parsed.prompt, parsed.quiet)
+        return await run_single_query(parsed.prompt, parsed.quiet, parsed.verbose)
 
     return await run_chat_mode(parsed.quiet)
 

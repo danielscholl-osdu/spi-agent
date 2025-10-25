@@ -138,14 +138,21 @@ class SPIAgent:
         # - Agent middleware: Intercepts agent.run() calls (workflow context injection)
         # - Function middleware: Intercepts tool calls (logging)
         # - Chat middleware: Intercepts LLM calls (logging)
+
+        # Combine all middleware into a single list for the new agent framework API
+        # (agent-framework 1.0.0b251016+ uses unified middleware parameter)
+        all_middleware = [
+            workflow_context_agent_middleware,
+            logging_function_middleware,
+            logging_chat_middleware,
+        ]
+
         self.agent = ChatAgent(
             chat_client=chat_client,
             instructions=self.instructions,
             tools=all_tools,
             name="SPI GitHub Issues Agent",
-            middleware=[workflow_context_agent_middleware],  # Agent-level middleware
-            function_middleware=[logging_function_middleware],
-            chat_middleware=[logging_chat_middleware],
+            middleware=all_middleware,
         )
 
     def _load_system_prompt(self) -> str:

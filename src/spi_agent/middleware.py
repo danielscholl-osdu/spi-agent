@@ -8,13 +8,20 @@ import logging
 import time
 from typing import Awaitable, Callable
 
-from agent_framework import AgentRunContext, ChatContext, FunctionInvocationContext
+from agent_framework import (
+    AgentRunContext,
+    ChatContext,
+    FunctionInvocationContext,
+    chat_middleware,
+    function_middleware,
+)
 
 from spi_agent.observability import record_tool_call, tracer
 
 logger = logging.getLogger(__name__)
 
 
+@function_middleware  # Explicitly mark as function middleware (per docs)
 async def logging_function_middleware(
     context: FunctionInvocationContext,
     next: Callable[[FunctionInvocationContext], Awaitable[None]],
@@ -46,6 +53,10 @@ async def logging_function_middleware(
     formatted_name = activity_tracker.format_tool_name(tool_name)
     await activity_tracker.update(f"🔧 {formatted_name}...")
 
+    # Emit tool start event (if in interactive mode)
+    arguments = context.arguments if hasattr(context, "arguments") else None
+    activity_tracker.emit_tool_start(tool_name, arguments)
+
     # Log arguments at debug level (can be verbose)
     if hasattr(context, "arguments") and context.arguments:
         logger.debug(f"[Tool Args] {context.arguments}")
@@ -75,6 +86,16 @@ async def logging_function_middleware(
             # Update activity tracker on success
             await activity_tracker.update(f"✓ {formatted_name}")
 
+            # Emit tool complete event with result summary
+            duration = time.time() - start_time
+            result = context.result if hasattr(context, "result") else None
+
+            # Format result summary
+            from spi_agent.display.result_formatter import format_tool_result
+            result_summary = format_tool_result(tool_name, result)
+
+            activity_tracker.emit_tool_complete(tool_name, result_summary, duration)
+
         except Exception as e:
             # Track errors
             status = "error"
@@ -84,6 +105,10 @@ async def logging_function_middleware(
 
             # Update activity tracker on error
             await activity_tracker.update(f"✗ {formatted_name} failed")
+
+            # Emit tool error event
+            duration = time.time() - start_time
+            activity_tracker.emit_tool_error(tool_name, str(e), duration)
 
             raise
 
@@ -103,6 +128,7 @@ async def logging_function_middleware(
             record_tool_call(tool_name, duration, status)
 
 
+@chat_middleware  # Explicitly mark as chat middleware (per docs)
 async def logging_chat_middleware(
     context: ChatContext,
     next: Callable[[ChatContext], Awaitable[None]],
@@ -129,6 +155,16 @@ async def logging_chat_middleware(
     # Update console activity tracker
     activity_tracker = get_activity_tracker()
     await activity_tracker.update("🤖 Thinking with AI...")
+
+    # Emit LLM request event (if in interactive mode)
+    from spi_agent.display import LLMRequestEvent, get_event_emitter, is_interactive_mode
+
+    llm_event_id = None
+    if is_interactive_mode():
+        event = LLMRequestEvent(message_count=message_count)
+        llm_event_id = event.event_id
+        emitter = get_event_emitter()
+        emitter.emit(event)
 
     # Log last message at debug level (usually the user query)
     if hasattr(context, "messages") and context.messages:
@@ -159,6 +195,15 @@ async def logging_chat_middleware(
 
             # Update activity tracker on success
             await activity_tracker.update("✓ AI response received")
+
+            # Emit LLM response event (if in interactive mode)
+            from spi_agent.display import LLMResponseEvent, get_event_emitter, is_interactive_mode
+
+            if is_interactive_mode() and llm_event_id:
+                response_event = LLMResponseEvent(duration=duration)
+                response_event.event_id = llm_event_id
+                emitter = get_event_emitter()
+                emitter.emit(response_event)
 
             # Log response at debug level
             if hasattr(context, "response") and context.response:
