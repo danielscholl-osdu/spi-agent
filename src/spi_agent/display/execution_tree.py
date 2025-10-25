@@ -477,9 +477,12 @@ class ExecutionTreeDisplay:
 
             except asyncio.CancelledError:
                 break
-            except Exception:
-                # Ignore errors in event processing to avoid crashing display
-                pass
+            except Exception as e:
+                # Log errors but don't crash display (resilience over strict error handling)
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Error processing execution tree event: {e}", exc_info=True)
+                # Continue processing other events
 
     async def _handle_event(self, event: ExecutionEvent) -> None:
         """Handle a single event.
@@ -579,11 +582,12 @@ class ExecutionTreeDisplay:
 
         self._running = True
 
-        # Start Rich Live display with higher refresh rate
+        # Start Rich Live display with reasonable refresh rate
+        # 10Hz (100ms) provides smooth updates without excessive CPU usage
         self._live = Live(
             self._render_tree(),
             console=self.console,
-            refresh_per_second=20,  # 50ms refresh rate for smoother updates
+            refresh_per_second=10,  # 100ms refresh rate - smooth and efficient
             transient=False,
         )
         self._live.start()
