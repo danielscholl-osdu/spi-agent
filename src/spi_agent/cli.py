@@ -19,6 +19,224 @@ from .mcp import MavenMCPManager
 
 console = Console()
 
+
+def _create_slash_command_completer():
+    """Create a completer for slash commands.
+
+    Returns a function that generates completions when called with (document, complete_event).
+    """
+    from prompt_toolkit.completion import Completer, Completion
+
+    class SlashCommandCompleter(Completer):
+        """Custom completer for slash commands that triggers on '/'."""
+
+        def __init__(self):
+            self.commands = {
+                '/status': 'Check GitHub/GitLab repository status',
+                '/test': 'Run Maven tests for service',
+                '/vulns': 'Scan for security vulnerabilities',
+                '/depends': 'Check for dependency updates',
+                '/fork': 'Fork and clone repositories',
+                '/send': 'Send GitHub PR/Issue to GitLab',
+                '/clear': 'Clear conversation history',
+                'help': 'Show detailed examples',
+                'exit': 'Quit Betty',
+            }
+
+        def get_completions(self, document, complete_event):
+            """Generate completions for the current input."""
+            text = document.text_before_cursor.lower()
+
+            if text.startswith('/'):
+                # This is a slash command
+                for cmd, description in self.commands.items():
+                    if cmd.lower().startswith(text):
+                        yield Completion(
+                            cmd,
+                            start_position=-len(text),
+                            display=cmd,
+                            display_meta=description,
+                        )
+            elif not text.startswith('/'):
+                # This is a plain command like 'help' or 'exit'
+                for cmd, description in self.commands.items():
+                    if not cmd.startswith('/') and cmd.lower().startswith(text):
+                        yield Completion(
+                            cmd,
+                            start_position=-len(text),
+                            display=cmd,
+                            display_meta=description,
+                        )
+
+    return SlashCommandCompleter()
+
+
+def _get_separator_line(width: Optional[int] = None) -> str:
+    """Get a horizontal separator line that fits the terminal width.
+
+    Args:
+        width: Optional width override. If None, uses console width.
+
+    Returns:
+        String of horizontal line characters
+    """
+    if width is None:
+        width = console.width
+    return "─" * width
+
+
+def _print_betty_separator() -> None:
+    """Print a separator line with centered Betty face in cyan."""
+    width = console.width
+    betty_plain = " ◉‿◉ "
+    betty_len = len(betty_plain)
+    left_len = (width - betty_len) // 2
+    right_len = width - left_len - betty_len
+
+    # Build separator with colored Betty in the middle
+    left_line = "─" * left_len
+    right_line = "─" * right_len
+
+    console.print(f"{left_line}[cyan]{betty_plain}[/cyan]{right_line}", highlight=False)
+
+
+def _render_full_startup_banner(
+    config: AgentConfig,
+    existing_repos: int,
+    total_repos: int,
+    maven_mcp_available: bool,
+    maven_mcp_version: str = "2.3.0",
+    github_connected: bool = True,
+    gitlab_connected: bool = False,
+) -> None:
+    """Render the full startup banner with all connection info.
+
+    Args:
+        config: Agent configuration
+        existing_repos: Number of repos that exist
+        total_repos: Total number of configured repos
+        maven_mcp_available: Whether Maven MCP is available
+        maven_mcp_version: Version of Maven MCP server
+        github_connected: Whether GitHub connection is valid
+        gitlab_connected: Whether GitLab connection is valid
+    """
+    # Header
+    console.print(" [cyan]◉‿◉[/cyan]  Welcome to SPI Agent")
+    console.print()
+
+    # Description
+    console.print(
+        " Betty helps manage OSDU services. Describe a task to get started or enter 'help' for examples."
+    )
+    console.print(" Betty uses AI, check for mistakes.")
+    console.print()
+
+    # Connection status (only show active connections)
+    # GitHub - show green if connected, red if not
+    status_dot = "[green]●[/green]" if github_connected else "[red]●[/red]"
+    status_text = "Connected" if github_connected else "Not connected"
+    console.print(
+        f" {status_dot} {status_text} to GitHub ([blue]{config.organization}[/blue]) · "
+        f"[cyan]{existing_repos}/{total_repos}[/cyan] repos available",
+        highlight=False
+    )
+
+    # Maven MCP - only show if available (server started successfully)
+    if maven_mcp_available:
+        console.print(f" [green]●[/green] Connected to Maven MCP Server ([cyan]v{maven_mcp_version}[/cyan])", highlight=False)
+
+    # GitLab - show green if connected, red if token exists but invalid
+    if config.gitlab_token:
+        # All OSDU services use community.opengroup.org (hardcoded in GitLab tools)
+        gitlab_url = "https://community.opengroup.org"
+        from urllib.parse import urlparse
+        domain = urlparse(gitlab_url).netloc
+
+        status_dot = "[green]●[/green]" if gitlab_connected else "[red]●[/red]"
+        status_text = "Connected" if gitlab_connected else "Not connected"
+        console.print(f" {status_dot} {status_text} to GitLab ([cyan]{domain}[/cyan])", highlight=False)
+
+    console.print()
+
+
+def _render_minimal_header() -> None:
+    """Render minimal header after /clear command."""
+    console.print(" [cyan]◉‿◉[/cyan]  SPI Agent")
+    console.print()
+
+
+def _get_status_bar_content(config: AgentConfig) -> tuple[str, str]:
+    """Get the status bar left and right content.
+
+    Args:
+        config: Agent configuration
+
+    Returns:
+        Tuple of (left_content, right_content)
+    """
+    import subprocess
+    from pathlib import Path
+
+    cwd = Path.cwd()
+    home = Path.home()
+
+    # Shorten path if it's under home directory
+    try:
+        display_path = f"~/{cwd.relative_to(home)}"
+    except ValueError:
+        display_path = str(cwd)
+
+    # Get git branch
+    branch = ""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            cwd=cwd,
+        )
+        if result.returncode == 0:
+            branch = f" [⎇ {result.stdout.strip()}]"
+    except Exception:
+        pass
+
+    # Build status line (without markup for length calculation)
+    model_display = config.azure_openai_deployment
+    left_content = f" {display_path}{branch}"
+    right_content = f"{model_display} · v0.1.0"
+
+    return left_content, right_content
+
+
+def _render_prompt_area(config: AgentConfig) -> None:
+    """Render the status bar and top separator only.
+
+    The prompt itself and bottom separator are handled by prompt_toolkit.
+
+    Args:
+        config: Agent configuration
+    """
+    left_content, right_content = _get_status_bar_content(config)
+    separator = _get_separator_line()
+
+    # Calculate spacing for right-aligned content (using plain text length)
+    available_space = console.width - len(left_content) - len(right_content)
+    spacing = " " * max(0, available_space)
+
+    # Apply color markup to right content (model and version in cyan)
+    # Parse the right_content to colorize: "gpt-5-mini · v0.1.0"
+    parts = right_content.split(" · ")
+    if len(parts) == 2:
+        right_content_colored = f"[cyan]{parts[0]}[/cyan] · [cyan]{parts[1]}[/cyan]"
+    else:
+        right_content_colored = f"[cyan]{right_content}[/cyan]"
+
+    # Render status bar and top separator with explicit colors
+    console.print(f"{left_content}{spacing}{right_content_colored}", highlight=False)
+    console.print(separator)
+
+
 # Attempt to load optional copilot workflows.
 COPILOT_AVAILABLE = False
 copilot_module = None
@@ -47,15 +265,39 @@ except ImportError:
 
 
 async def handle_slash_command(command: str, agent: SPIAgent, thread) -> Optional[str]:
-    """Handle slash commands in chat mode."""
-    if not COPILOT_AVAILABLE or copilot_module is None:
-        return "Error: Copilot module not available for slash commands"
+    """Handle slash commands in chat mode.
 
+    Returns:
+        None if command executed successfully
+        "__CLEAR_CONTEXT__" signal if context should be cleared
+        Error message string if command failed
+    """
     parts = command[1:].split()  # Remove leading /
     if not parts:
         return None
 
     cmd = parts[0].lower()
+
+    # Handle /clear command (doesn't require copilot)
+    if cmd == "clear":
+        from spi_agent.workflows import get_result_store
+        from spi_agent.activity import get_activity_tracker
+        from spi_agent.utils.terminal import clear_screen
+
+        result_store = get_result_store()
+        await result_store.clear()
+
+        activity_tracker = get_activity_tracker()
+        await activity_tracker.reset()
+
+        clear_screen()
+
+        # Return special signal to indicate context should be cleared
+        return "__CLEAR_CONTEXT__"
+
+    # All other commands require copilot
+    if not COPILOT_AVAILABLE or copilot_module is None:
+        return "Error: Copilot module not available for slash commands"
 
     if cmd == "fork":
         if len(parts) < 2:
@@ -441,6 +683,58 @@ def _render_help() -> None:
     console.print()
 
 
+async def _validate_github_connection(config: AgentConfig) -> bool:
+    """Validate that we can actually connect to GitHub.
+
+    Args:
+        config: Agent configuration
+
+    Returns:
+        True if GitHub connection works, False otherwise
+    """
+    import subprocess
+
+    try:
+        # Use gh auth status to check if we're authenticated
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["gh", "auth", "status"],
+            capture_output=True,
+            timeout=5
+        )
+        # gh auth status returns 0 if authenticated
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+async def _validate_gitlab_connection(config: AgentConfig) -> bool:
+    """Validate that we can actually connect to GitLab.
+
+    Args:
+        config: Agent configuration
+
+    Returns:
+        True if GitLab connection works, False otherwise
+    """
+    if not config.gitlab_token:
+        return False
+
+    try:
+        import aiohttp
+
+        # All OSDU services use community.opengroup.org (hardcoded in GitLab tools)
+        gitlab_url = "https://community.opengroup.org"
+        url = f"{gitlab_url}/api/v4/user"
+        headers = {"PRIVATE-TOKEN": config.gitlab_token}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                return response.status == 200
+    except Exception:
+        return False
+
+
 async def _count_existing_repos(config: AgentConfig) -> int:
     """Count how many configured repositories actually exist in GitHub.
 
@@ -584,14 +878,27 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
         agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
 
         if not quiet:
-            # Count existing repositories
-            existing_count = await _count_existing_repos(config)
+            # Validate connections and count existing repositories (run in parallel)
+            github_connected, gitlab_connected, existing_count = await asyncio.gather(
+                _validate_github_connection(config),
+                _validate_gitlab_connection(config),
+                _count_existing_repos(config),
+            )
             total_count = len(config.repositories)
 
-            console.print(f"[cyan][◉‿◉] Agent (Betty)[/cyan]")
-            console.print(f"[blue]{agent.config.organization}[/blue] | [green]{existing_count}/{total_count} repos[/green]")
-            console.print()
-            console.print("[dim]Type 'help' for available commands and 'exit' to quit[/dim]\n")
+            # Render full startup banner with connection status
+            _render_full_startup_banner(
+                config=config,
+                existing_repos=existing_count,
+                total_repos=total_count,
+                maven_mcp_available=maven_mcp.is_available,
+                maven_mcp_version="2.3.0",
+                github_connected=github_connected,
+                gitlab_connected=gitlab_connected,
+            )
+
+            # Render prompt area
+            _render_prompt_area(config)
 
         thread = agent.agent.get_new_thread()
 
@@ -604,18 +911,29 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
             from prompt_toolkit.history import InMemoryHistory
             from prompt_toolkit.styles import Style as PromptStyle
             from prompt_toolkit.output import ColorDepth
-            from prompt_toolkit.formatted_text import FormattedText
+            from prompt_toolkit.formatted_text import FormattedText, HTML
             from prompt_toolkit.patch_stdout import patch_stdout as pt_patch_stdout
 
-            # Create session with history and proper key bindings
+            # Create custom slash command completer
+            completer = _create_slash_command_completer()
+
+            # Create session with history and command completion
             session = PromptSession(
                 history=InMemoryHistory(),
+                completer=completer,
+                complete_while_typing=True,  # Show completions as user types
                 style=PromptStyle.from_dict({
-                    'prompt': 'green bold',
+                    'prompt': 'ansicyan',
+                    'completion-menu': 'bg:#262626 #ffffff',
+                    'completion-menu.completion': 'bg:#262626 #00ffff',  # cyan text
+                    'completion-menu.completion.current': 'bg:#00ffff #000000',  # current selection
+                    'completion-menu.meta.completion': 'bg:#262626 #6c6c6c',  # dim description
+                    'completion-menu.meta.completion.current': 'bg:#00ffff #000000',
                 }),
                 enable_history_search=True,
                 mouse_support=False,  # Disable mouse to avoid conflicts
                 color_depth=ColorDepth.TRUE_COLOR,
+                placeholder=HTML('<ansibrightblack>  Type / then Tab for commands, or ask naturally</ansibrightblack>'),
             )
             prompt_tokens = FormattedText([('class:prompt', '> ')])
             patch_stdout = pt_patch_stdout
@@ -652,42 +970,31 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
 
                 if query.lower() in ["help", "/help"]:
                     _render_help()
-                    continue
-
-                if query.lower() in ["clear", "/clear"]:
-                    # Clear workflow result store
-                    from spi_agent.workflows import get_result_store
-                    from spi_agent.activity import get_activity_tracker
-                    from spi_agent.utils.terminal import clear_screen
-
-                    result_store = get_result_store()
-                    await result_store.clear()
-
-                    # Reset activity tracker
-                    activity_tracker = get_activity_tracker()
-                    await activity_tracker.reset()
-
-                    # Clear terminal screen
-                    clear_screen()
-
-                    # Reprint banner
-                    if not quiet:
-                        console.print(f"[cyan][◉‿◉] Agent (Betty)[/cyan]")
-                        console.print()
-
-                    # Replace thread
-                    thread = agent.agent.get_new_thread()
+                    # Print separator with Betty after help
+                    _print_betty_separator()
                     continue
 
                 if query.startswith("/"):
-                    if not COPILOT_AVAILABLE:
-                        console.print("\n[red]Commands require the optional Copilot workflows.[/red]\n")
+                    # Handle slash commands (includes /clear which doesn't require copilot)
+                    result = await handle_slash_command(query, agent, thread)
+
+                    # Check for special __CLEAR_CONTEXT__ signal
+                    if result == "__CLEAR_CONTEXT__":
+                        # Reprint minimal header and prompt area
+                        if not quiet:
+                            _render_minimal_header()
+                            _render_prompt_area(config)
+
+                        # Replace thread
+                        thread = agent.agent.get_new_thread()
                         continue
 
-                    error = await handle_slash_command(query, agent, thread)
+                    # Handle errors
+                    if result:
+                        console.print(f"\n[red]{result}[/red]\n")
 
-                    if error:
-                        console.print(f"\n[red]{error}[/red]\n")
+                    # Print separator with Betty after slash command completes
+                    _print_betty_separator()
                     continue
 
                 # Use execution tree display if visualization enabled, otherwise simple status
@@ -767,16 +1074,24 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
 
                 result_text = str(result) if not isinstance(result, str) else result
 
+                # Render response with minimal Betty-style formatting
                 console.print()
-                console.print(
-                    Panel(
-                        Markdown(result_text),
-                        title="[bold green][◉‿◉][/bold green]",
-                        border_style="green",
-                        padding=(1, 2),
-                    )
-                )
+
+                # Render with Betty's face prefix (preserving markdown formatting)
+                from rich.text import Text
+                prefix = Text("◉‿◉ ", style="cyan")
+
+                # Render the markdown content
+                markdown_content = Markdown(result_text)
+
+                # Print prefix on same line, then markdown
+                console.print(prefix, end="")
+                console.print(markdown_content)
                 console.print()
+
+                # Re-render separator for next input
+                separator = _get_separator_line()
+                console.print(separator)
 
             except EOFError:
                 console.print("\n[yellow]Goodbye![/yellow]")
