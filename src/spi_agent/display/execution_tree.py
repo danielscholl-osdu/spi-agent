@@ -195,15 +195,18 @@ class ExecutionTreeDisplay:
         self,
         console: Optional[Console] = None,
         display_mode: DisplayMode = DisplayMode.MINIMAL,
+        show_completion_summary: bool = True,
     ):
         """Initialize execution tree display.
 
         Args:
             console: Rich console to use (creates new one if not provided)
             display_mode: Display verbosity level (MINIMAL, DEFAULT, VERBOSE)
+            show_completion_summary: Whether to show completion summary in MINIMAL mode
         """
         self.console = console or Console()
         self.display_mode = display_mode
+        self.show_completion_summary = show_completion_summary
         self._live: Optional[Live] = None
         self._root_nodes: List[TreeNode] = []
         self._node_map: Dict[str, TreeNode] = {}
@@ -285,15 +288,15 @@ class ExecutionTreeDisplay:
 
                 # No progress line in MINIMAL mode - just show what's happening
 
-            elif completed_count == total_phases and total_phases > 0:
-                # All done - show minimal summary with Betty's face and final counts
+            elif completed_count == total_phases and total_phases > 0 and self.show_completion_summary:
+                # All done - show minimal summary with final counts (if enabled)
                 total_tools = sum(len(p.tool_nodes) for p in self._phases)
                 final_phase = self._phases[-1] if self._phases else None
                 final_messages = final_phase.llm_node.metadata.get("message_count", 0) if (final_phase and final_phase.llm_node) else 0
 
-                # Create completion text with different styles
+                # Create completion text with different styles (using ◉ without tree character)
                 summary_text = Text()
-                summary_text.append(f"⎿ [◉‿◉] Complete ({session_duration:.1f}s) - ", style=COLOR_SUCCESS)
+                summary_text.append(f"{SYMBOL_QUERY} Complete ({session_duration:.1f}s) - ", style=COLOR_SUCCESS)
                 summary_text.append(f"msg:{final_messages} tool:{total_tools}", style="dim")
                 renderables.append(summary_text)
 
@@ -584,11 +587,13 @@ class ExecutionTreeDisplay:
 
         # Start Rich Live display with reasonable refresh rate
         # 10Hz (100ms) provides smooth updates without excessive CPU usage
+        # Use transient mode when not showing completion summary (prompt mode)
+        # so the display disappears when done, leaving no trace
         self._live = Live(
             self._render_tree(),
             console=self.console,
             refresh_per_second=10,  # 100ms refresh rate - smooth and efficient
-            transient=False,
+            transient=not self.show_completion_summary,  # Transient when no completion summary
         )
         self._live.start()
 
@@ -623,13 +628,16 @@ class ExecutionTreeDisplay:
 
         # Stop Rich Live display
         if self._live:
-            # Final render before stopping (this will persist since transient=False)
-            self._live.update(self._render_tree())
+            if self.show_completion_summary:
+                # Non-transient: final render persists, so update before stopping
+                self._live.update(self._render_tree())
+            # Stop the live display (will disappear if transient=True)
             self._live.stop()
 
-            # Live display persists, so no need to print again
-            # Just add a blank line for spacing
-            self.console.print()
+            # Only add blank line for spacing if showing completion summary
+            # (transient displays disappear completely, no spacing needed)
+            if self.show_completion_summary:
+                self.console.print()
 
     async def update(self) -> None:
         """Manually trigger a display update.

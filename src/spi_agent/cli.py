@@ -85,21 +85,6 @@ def _get_separator_line(width: Optional[int] = None) -> str:
     return "─" * width
 
 
-def _print_betty_separator() -> None:
-    """Print a separator line with centered Betty face in cyan."""
-    width = console.width
-    betty_plain = " ◉‿◉ "
-    betty_len = len(betty_plain)
-    left_len = (width - betty_len) // 2
-    right_len = width - left_len - betty_len
-
-    # Build separator with colored Betty in the middle
-    left_line = "─" * left_len
-    right_line = "─" * right_len
-
-    console.print(f"{left_line}[cyan]{betty_plain}[/cyan]{right_line}", highlight=False)
-
-
 def _render_full_startup_banner(
     config: AgentConfig,
     existing_repos: int,
@@ -970,8 +955,9 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
 
                 if query.lower() in ["help", "/help"]:
                     _render_help()
-                    # Print separator with Betty after help
-                    _print_betty_separator()
+                    # Print separator after help (dimmed)
+                    separator = _get_separator_line()
+                    console.print(separator, style="dim")
                     continue
 
                 if query.startswith("/"):
@@ -993,8 +979,9 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
                     if result:
                         console.print(f"\n[red]{result}[/red]\n")
 
-                    # Print separator with Betty after slash command completes
-                    _print_betty_separator()
+                    # Print separator after slash command (dimmed)
+                    separator = _get_separator_line()
+                    console.print(separator, style="dim")
                     continue
 
                 # Use execution tree display if visualization enabled, otherwise simple status
@@ -1009,7 +996,12 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
                     display_mode = DisplayMode.VERBOSE if verbose else DisplayMode.MINIMAL
 
                     # Create execution tree display
-                    tree_display = ExecutionTreeDisplay(console=console, display_mode=display_mode)
+                    # Show completion summary in MINIMAL mode (not in VERBOSE - redundant with phase tree)
+                    tree_display = ExecutionTreeDisplay(
+                        console=console,
+                        display_mode=display_mode,
+                        show_completion_summary=not verbose  # Show in MINIMAL, not in VERBOSE
+                    )
 
                     try:
                         # Start tree display (event processing runs in background)
@@ -1089,9 +1081,9 @@ async def run_chat_mode(quiet: bool = False, verbose: bool = False) -> int:
                 console.print(markdown_content)
                 console.print()
 
-                # Re-render separator for next input
+                # Re-render separator for next input (dimmed to reduce visual clutter in scrollback)
                 separator = _get_separator_line()
-                console.print(separator)
+                console.print(separator, style="dim")
 
             except EOFError:
                 console.print("\n[yellow]Goodbye![/yellow]")
@@ -1138,18 +1130,11 @@ async def run_single_query(prompt: str, quiet: bool = False, verbose: bool = Fal
         # Create agent with Maven MCP tools if available
         agent = SPIAgent(config, mcp_tools=maven_mcp.tools)
 
-        if not quiet and not verbose:
+        # Show header for both default and verbose modes (not quiet)
+        if not quiet:
             maven_status = "enabled" if maven_mcp.is_available else "disabled"
-            console.print(
-                Panel(
-                    f"[cyan]Model:[/cyan] {agent.config.azure_openai_deployment}\n"
-                    f"[cyan]Maven MCP:[/cyan] {maven_status}\n"
-                    f"[cyan]Query:[/cyan] {prompt}",
-                    title="[◉‿◉]",
-                    border_style="blue",
-                )
-            )
-            console.print()
+            console.print(" [cyan]◉‿◉[/cyan]  SPI Agent")
+            console.print(f" Model: [cyan]{agent.config.azure_openai_deployment}[/cyan] · Maven MCP: [cyan]{maven_status}[/cyan]")
 
         try:
             if verbose:
@@ -1167,27 +1152,60 @@ async def run_single_query(prompt: str, quiet: bool = False, verbose: bool = Fal
                     # Interactive mode already set at function start
                     result = await agent.agent.run(prompt, thread=thread)
 
+            elif not quiet:
+                # Use MINIMAL execution tree display for normal mode (non-quiet, non-verbose)
+                from spi_agent.display import ExecutionContext, set_execution_context
+                from spi_agent.display.execution_tree import ExecutionTreeDisplay, DisplayMode
+                from spi_agent.display.events import get_event_emitter
+
+                # Set execution context for MINIMAL display
+                execution_context = ExecutionContext(
+                    is_interactive=True, show_visualization=True
+                )
+                set_execution_context(execution_context)
+
+                # Enable event emitter interactive mode
+                emitter = get_event_emitter()
+                emitter.set_interactive_mode(True, True)
+
+                try:
+                    # Use MINIMAL mode to show only active phase, without completion summary
+                    tree_display = ExecutionTreeDisplay(
+                        console=console,
+                        display_mode=DisplayMode.MINIMAL,
+                        show_completion_summary=False  # Don't show completion line in prompt mode
+                    )
+
+                    async with tree_display:
+                        # Create a new thread for the single query
+                        thread = agent.agent.get_new_thread()
+                        result = await agent.agent.run(prompt, thread=thread)
+                finally:
+                    # Reset interactive mode
+                    emitter.set_interactive_mode(False, False)
+
             else:
-                # Use simple status spinner for normal mode
-                with console.status("[bold blue]Processing query...[/bold blue]", spinner="dots"):
-                    # Create a new thread for the single query
-                    thread = agent.agent.get_new_thread()
-                    result = await agent.agent.run(prompt, thread=thread)
+                # Quiet mode - no display, just execute
+                thread = agent.agent.get_new_thread()
+                result = await agent.agent.run(prompt, thread=thread)
 
             result_text = str(result) if not isinstance(result, str) else result
 
             if quiet:
                 console.print(result_text)
             else:
+                # Add blank line before separator (for spacing after header or verbose tree)
                 console.print()
-                console.print(
-                    Panel(
-                        Markdown(result_text),
-                        title="[bold green]Result[/bold green]",
-                        border_style="green",
-                        padding=(1, 2),
-                    )
-                )
+                # Print separator with Betty face
+                width = console.width
+                label = " ◉‿◉ "
+                label_len = len(label)
+                left_len = (width - label_len) // 2
+                right_len = width - left_len - label_len
+                console.print(f"{'─' * left_len}[cyan]{label}[/cyan]{'─' * right_len}")
+                console.print()
+                # Print markdown result directly
+                console.print(Markdown(result_text))
 
             return 0
 
